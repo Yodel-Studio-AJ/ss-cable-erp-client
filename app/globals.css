@@ -1,26 +1,65 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-work-sans);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ── Light (default) ───────────────────────────────────────── */
+:root {
+  --color-bg-page: #ffffff;
+  --color-bg-sidebar: #ffffff;
+  --color-bg-topbar: #ffffff;
+  --color-bg-popup: #ffffff;
+  --color-bg-input: #f3f4f6;
+  --color-bg-nav-active: #e5e7eb;
+  --color-bg-nav-hover: #f3f4f6;
+  --color-bg-user-hover: #f3f4f6;
+  --color-bg-initials: #d1d5db;
+  --color-bg-table-header: #181818;
+
+  --color-text-primary: #111827;
+  --color-text-secondary: #6b7280;
+  --color-text-muted: #9ca3af;
+  --color-text-nav: #4b5563;
+  --color-text-nav-active: #111827;
+  --color-text-initials: #1f2937;
+
+  --color-border: #e5e7eb;
+  --color-border-input: #d1d5db;
+
+  --color-btn-bg: #111827;
+  --color-btn-text: #ffffff;
+  --color-btn-hover: #374151;
+
+  --color-connector: #c0c0c0;
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+/* ── Dark ──────────────────────────────────────────────────── */
+:root.dark {
+  --color-bg-page: #181818;
+  --color-bg-sidebar: #181818;
+  --color-bg-topbar: #181818;
+  --color-bg-popup: #1e1e1e;
+  --color-bg-input: #1e1e1e;
+  --color-bg-nav-active: #4F4F4F;
+  --color-bg-nav-hover: #4F4F4F;
+  --color-bg-user-hover: #252525;
+  --color-bg-initials: #4b5563;
+  --color-bg-table-header: #b5b5b5;
+
+  --color-text-primary: #ffffff;
+  --color-text-secondary: #C4C4C4;
+  --color-text-muted: #888888;
+  --color-text-nav: #C4C4C4;
+  --color-text-nav-active: #ffffff;
+  --color-text-initials: #ffffff;
+
+  --color-border: rgba(55, 65, 81, 0.5);
+  --color-border-input: #374151;
+
+  --color-btn-bg: #b5b5b5;
+  --color-btn-text: #000000;
+  --color-btn-hover: #e5e7eb;
+
+  --color-connector: #3f3f3f;
 }
