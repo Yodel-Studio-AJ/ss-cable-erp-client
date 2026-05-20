@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo } from "react";
 import { Plus, Trash2, UserPlus, User as UserIcon, Mail, Hash, Search, ChevronDown } from "lucide-react";
 import Modal from "@/components/ui/Modal";
+import PermissionDenied from "@/components/ui/PermissionDenied";
 import { getSubCompanies, addSubCompanyMember } from "@/api/subCompanies";
 import { getUsers, createUser, deleteUser } from "@/api/users";
 import type { CreateUserPayload } from "@/api/users";
@@ -35,7 +36,7 @@ const ROLE_CHIP: Record<string, string> = {
 function RoleChip({ role }: { role: string }) {
   return (
     <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${ROLE_CHIP[role] ?? "bg-gray-100 text-gray-600"}`}>
-      {role.replace("_", " ")}
+      {role?.replace("_", " ") ?? "unknown"}
     </span>
   );
 }
@@ -51,6 +52,7 @@ export default function MembersPage() {
   const [companies, setCompanies] = useState<SubCompany[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [permissionDenied, setPermissionDenied] = useState(false);
 
   // Filters
   const [search, setSearch] = useState("");
@@ -71,8 +73,12 @@ export default function MembersPage() {
       try {
         const [u, c] = await Promise.all([getUsers(), getSubCompanies()]);
         if (!cancelled) { setUsers(u); setCompanies(c); }
-      } catch {
-        if (!cancelled) setError("Failed to load data.");
+      } catch (err) {
+        if (!cancelled) {
+          const status = (err as AxiosError).response?.status;
+          if (status === 403) setPermissionDenied(true);
+          else setError("Failed to load data.");
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -144,6 +150,8 @@ export default function MembersPage() {
 
   const clearFilters = () => { setSearch(""); setRoleFilter(""); setBranchFilter(""); };
   const hasFilters = !!(search || roleFilter || branchFilter);
+
+  if (permissionDenied) return <PermissionDenied />;
 
   return (
     <div className="max-w-4xl mx-auto space-y-5">
