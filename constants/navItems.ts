@@ -1,4 +1,4 @@
-import { LayoutDashboard, Settings, Package, Building2 } from "lucide-react";
+import { LayoutDashboard, Settings, Package, Building2, Users2 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export interface NavChild {
@@ -24,6 +24,13 @@ export const navItems: NavItem[] = [
     icon: Package,
     children: [
       { name: "Product Groups", href: "/inventory/product-groups" },
+    ],
+  },
+  {
+    name: "Parties",
+    icon: Users2,
+    children: [
+      { name: "Customers", href: "/parties/customers" },
     ],
   },
   {

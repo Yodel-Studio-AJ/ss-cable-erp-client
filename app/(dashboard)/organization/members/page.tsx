@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
-import { Plus, Trash2, UserPlus, User as UserIcon, Mail, Hash, Search, ChevronDown } from "lucide-react";
+import { Trash2, UserPlus, User as UserIcon, Mail, Hash, Search, ChevronDown, Pencil, Building2 } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import PermissionDenied from "@/components/ui/PermissionDenied";
-import { getSubCompanies, addSubCompanyMember } from "@/api/subCompanies";
-import { getUsers, createUser, deleteUser } from "@/api/users";
-import type { CreateUserPayload } from "@/api/users";
+import { getSubCompanies, addSubCompanyMember, removeSubCompanyMember } from "@/api/subCompanies";
+import { getUsers, createUser, updateUser, deleteUser } from "@/api/users";
+import type { CreateUserPayload, UpdateUserPayload } from "@/api/users";
 import type { SubCompany } from "@/types/subCompany";
 import type { User, UserRole } from "@/types/auth";
 import type { AxiosError } from "axios";
@@ -65,6 +65,17 @@ export default function MembersPage() {
   const [selectedBranchIds, setSelectedBranchIds] = useState<Set<string>>(new Set());
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+
+  // Edit modal
+  const [editTarget, setEditTarget] = useState<User | null>(null);
+  const [editForm, setEditForm] = useState<UpdateUserPayload>({});
+  const [saving, setSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  // Manage branches modal
+  const [branchTarget, setBranchTarget] = useState<User | null>(null);
+  const [branchSelection, setBranchSelection] = useState<Set<string>>(new Set());
+  const [savingBranches, setSavingBranches] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -141,6 +152,64 @@ export default function MembersPage() {
       setUsers((p) => p.filter((u) => u.id !== id));
     } catch {
       setError("Failed to delete user.");
+    }
+  }
+
+  function openEdit(u: User) {
+    setEditTarget(u);
+    setEditForm({ name: u.name, email: u.email, phoneNumber: u.phoneNumber, role: u.role });
+    setEditError(null);
+  }
+
+  async function handleEdit() {
+    if (!editTarget) return;
+    setSaving(true);
+    setEditError(null);
+    try {
+      const updated = await updateUser(editTarget.id, editForm);
+      setUsers((p) => p.map((u) => (u.id === updated.id ? { ...u, ...updated } : u)));
+      setEditTarget(null);
+    } catch (err) {
+      const e = err as AxiosError<{ message?: string }>;
+      setEditError(e.response?.data?.message ?? "Failed to update member.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function openBranches(u: User) {
+    setBranchTarget(u);
+    setBranchSelection(new Set(u.subCompanyIds ?? []));
+  }
+
+  function toggleBranchSelection(id: string) {
+    setBranchSelection((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
+
+  async function handleSaveBranches() {
+    if (!branchTarget) return;
+    setSavingBranches(true);
+    const current = new Set(branchTarget.subCompanyIds ?? []);
+    const toAdd = [...branchSelection].filter((id) => !current.has(id));
+    const toRemove = [...current].filter((id) => !branchSelection.has(id));
+    try {
+      await Promise.all([
+        ...toAdd.map((id) => addSubCompanyMember(id, { userId: branchTarget.id, isPrimary: false })),
+        ...toRemove.map((id) => removeSubCompanyMember(id, branchTarget.id)),
+      ]);
+      setUsers((p) =>
+        p.map((u) => (u.id === branchTarget.id ? { ...u, subCompanyIds: [...branchSelection] } : u))
+      );
+      setBranchTarget(null);
+    } catch (err) {
+      const e = err as AxiosError<{ message?: string }>;
+      setError(e.response?.data?.message ?? "Failed to update branches.");
+    } finally {
+      setSavingBranches(false);
     }
   }
 
@@ -330,13 +399,25 @@ export default function MembersPage() {
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      <div className="flex items-center justify-end">
+                      <div className="flex items-center justify-end gap-0.5">
+                        <button onClick={() => openBranches(u)} title="Manage branches"
+                          style={{ color: "var(--color-text-muted)" }}
+                          className="p-1.5 rounded hover:opacity-70 transition-opacity">
+                          <Building2 size={13} />
+                        </button>
                         {!isCurrentUser && u.role !== "owner" && (
-                          <button onClick={() => handleDelete(u.id)}
-                            style={{ color: "var(--color-text-muted)" }}
-                            className="p-1.5 rounded transition-colors hover:text-red-500">
-                            <Trash2 size={13} />
-                          </button>
+                          <>
+                            <button onClick={() => openEdit(u)} title="Edit member"
+                              style={{ color: "var(--color-text-muted)" }}
+                              className="p-1.5 rounded hover:opacity-70 transition-opacity">
+                              <Pencil size={13} />
+                            </button>
+                            <button onClick={() => handleDelete(u.id)} title="Delete member"
+                              style={{ color: "var(--color-text-muted)" }}
+                              className="p-1.5 rounded transition-colors hover:text-red-500">
+                              <Trash2 size={13} />
+                            </button>
+                          </>
                         )}
                       </div>
                     </td>
@@ -346,6 +427,97 @@ export default function MembersPage() {
             </tbody>
           </table>
         </div>
+      )}
+
+      {/* Edit member modal */}
+      {editTarget && (
+        <Modal title="Edit Member" onClose={() => setEditTarget(null)}>
+          <div className="space-y-3">
+            {editError && (
+              <p className="text-red-500 text-xs bg-red-500/10 border border-red-500/20 rounded px-3 py-2">{editError}</p>
+            )}
+            <div>
+              <label style={{ color: "var(--color-text-muted)" }} className="block text-xs mb-1">Full Name</label>
+              <input type="text" value={editForm.name ?? ""} onChange={(e) => setEditForm((p) => ({ ...p, name: e.target.value }))}
+                placeholder="Full name" style={inputStyle} className={inputCls} />
+            </div>
+            <div>
+              <label style={{ color: "var(--color-text-muted)" }} className="block text-xs mb-1">Email</label>
+              <input type="email" value={editForm.email ?? ""} onChange={(e) => setEditForm((p) => ({ ...p, email: e.target.value }))}
+                placeholder="email@example.com" style={inputStyle} className={inputCls} />
+            </div>
+            <div>
+              <label style={{ color: "var(--color-text-muted)" }} className="block text-xs mb-1">Phone Number</label>
+              <input type="tel" value={editForm.phoneNumber ?? ""} onChange={(e) => setEditForm((p) => ({ ...p, phoneNumber: e.target.value }))}
+                placeholder="9876543210" style={inputStyle} className={inputCls} />
+            </div>
+            {currentUser?.role === "owner" && (
+              <div>
+                <label style={{ color: "var(--color-text-muted)" }} className="block text-xs mb-1">Role</label>
+                <select value={editForm.role ?? ""} onChange={(e) => setEditForm((p) => ({ ...p, role: e.target.value as UserRole }))}
+                  style={inputStyle} className={inputCls}>
+                  {(["admin", "floor_manager", "member"] as UserRole[]).map((r) => (
+                    <option key={r} value={r}>{ROLE_LABELS[r]}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div className="flex gap-2 pt-2">
+              <button onClick={() => setEditTarget(null)}
+                style={{ borderColor: "var(--color-border)", color: "var(--color-text-secondary)" }}
+                className="flex-1 border rounded-lg py-2 text-sm hover:opacity-70 transition-opacity">
+                Cancel
+              </button>
+              <button onClick={handleEdit} disabled={saving}
+                style={{ backgroundColor: "var(--color-btn-bg)", color: "var(--color-btn-text)" }}
+                className="flex-1 rounded-lg py-2 text-sm font-medium hover:opacity-80 transition-opacity disabled:opacity-40">
+                {saving ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* Manage branches modal */}
+      {branchTarget && (
+        <Modal title={`Branches — ${branchTarget.name}`} onClose={() => setBranchTarget(null)}>
+          <div className="space-y-3">
+            {companies.length === 0 ? (
+              <p style={{ color: "var(--color-text-muted)" }} className="text-sm text-center py-6">No branches exist yet.</p>
+            ) : (
+              <div style={{ borderColor: "var(--color-border)" }} className="border rounded divide-y max-h-64 overflow-y-auto">
+                {companies.map((c) => (
+                  <label key={c.id} className="flex items-center gap-3 px-3 py-2.5 cursor-pointer hover:opacity-80 transition-opacity"
+                    style={{ backgroundColor: "var(--color-bg-page)" }}>
+                    <input type="checkbox" checked={branchSelection.has(c.id)} onChange={() => toggleBranchSelection(c.id)}
+                      className="h-4 w-4 rounded cursor-pointer" />
+                    <div className="flex-1 min-w-0">
+                      <span style={{ color: "var(--color-text-primary)" }} className="text-sm font-medium">{c.name}</span>
+                      {(c.city || c.address) && (
+                        <span style={{ color: "var(--color-text-muted)" }} className="text-xs ml-2">{c.city ?? c.address}</span>
+                      )}
+                    </div>
+                  </label>
+                ))}
+              </div>
+            )}
+            <p style={{ color: "var(--color-text-muted)" }} className="text-xs">
+              {branchSelection.size} branch{branchSelection.size !== 1 ? "es" : ""} selected
+            </p>
+            <div className="flex gap-2 pt-1">
+              <button onClick={() => setBranchTarget(null)}
+                style={{ borderColor: "var(--color-border)", color: "var(--color-text-secondary)" }}
+                className="flex-1 border rounded-lg py-2 text-sm hover:opacity-70 transition-opacity">
+                Cancel
+              </button>
+              <button onClick={handleSaveBranches} disabled={savingBranches}
+                style={{ backgroundColor: "var(--color-btn-bg)", color: "var(--color-btn-text)" }}
+                className="flex-1 rounded-lg py-2 text-sm font-medium hover:opacity-80 transition-opacity disabled:opacity-40">
+                {savingBranches ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        </Modal>
       )}
 
       {/* Create member modal */}
