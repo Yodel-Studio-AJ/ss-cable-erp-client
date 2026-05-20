@@ -12,17 +12,13 @@ export interface SubCompany {
 
 export interface SubCompanyMember {
   userId: string;
-  subCompanyId: string;
   isPrimary: boolean;
-  createdAt: string;
-  user: {
-    id: string;
-    name: string;
-    email: string;
-    phoneNumber: string;
-    role: UserRole;
-    isActive: boolean;
-  };
+  joinedAt: string;
+  name: string;
+  email: string;
+  phoneNumber: string;
+  role: UserRole;
+  isActive: boolean;
 }
 
 export interface CreateSubCompanyPayload {

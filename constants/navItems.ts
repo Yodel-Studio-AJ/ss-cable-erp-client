@@ -1,4 +1,4 @@
-import { LayoutDashboard, Settings, Package } from "lucide-react";
+import { LayoutDashboard, Settings, Package, Building2 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export interface NavChild {
@@ -27,11 +27,19 @@ export const navItems: NavItem[] = [
     ],
   },
   {
+    name: "Organization",
+    icon: Building2,
+    children: [
+      { name: "Branches", href: "/organization/branches" },
+      { name: "Members", href: "/organization/members" },
+      { name: "Attendance", href: "/organization/attendance" },
+    ],
+  },
+  {
     name: "Settings",
     icon: Settings,
     children: [
       { name: "Owner Settings", href: "/settings/owner-settings" },
-      { name: "Organization", href: "/settings/organization" },
       { name: "Integration Settings", href: "/settings/integration-settings" },
     ],
   },
