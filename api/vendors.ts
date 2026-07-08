@@ -28,3 +28,7 @@ export async function deleteVendor(id: string): Promise<void> {
 export async function setVendorProductGroups(id: string, productGroupIds: string[]): Promise<void> {
   await api.put(`/api/vendors/${id}/product-groups`, { productGroupIds });
 }
+
+export async function setVendorBranches(id: string, branchIds: string[]): Promise<void> {
+  await api.put(`/api/vendors/${id}/branches`, { branchIds });
+}

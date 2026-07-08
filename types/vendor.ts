@@ -19,6 +19,7 @@ export interface Vendor {
   createdAt:           string;
   updatedAt:           string;
   productGroupIds:     string[];
+  branchIds:           string[];
 }
 
 export interface CreateVendorPayload {
