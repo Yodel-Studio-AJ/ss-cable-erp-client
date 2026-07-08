@@ -85,7 +85,7 @@ export default function BranchesPage() {
   if (permissionDenied) return <PermissionDenied />;
 
   return (
-    <div className="max-w-4xl mx-auto space-y-5">
+    <div className="space-y-5">
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>

@@ -31,6 +31,7 @@ export const navItems: NavItem[] = [
     icon: Users2,
     children: [
       { name: "Customers", href: "/parties/customers" },
+      { name: "Vendors", href: "/parties/vendors" },
     ],
   },
   {
