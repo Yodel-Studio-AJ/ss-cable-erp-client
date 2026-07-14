@@ -6,6 +6,8 @@ export type ProductGroupType =
 
 export type MaterialType = "metal" | "pvc" | "mixed";
 
+import type { GroupAttribute } from './attribute';
+
 export interface ProductGroup {
   id: string;
   name: string;
@@ -14,6 +16,8 @@ export interface ProductGroup {
   materialType: MaterialType;
   createdAt: string;
   updatedAt: string;
+  // present on the detail fetch (/product-groups/:id), absent on the list
+  attributes?: GroupAttribute[];
 }
 
 export interface CreateProductGroupPayload {
