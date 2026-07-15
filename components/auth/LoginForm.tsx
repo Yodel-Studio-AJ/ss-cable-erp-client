@@ -117,7 +117,7 @@ export default function LoginForm() {
         </button>
       </form>
 
-      <p
+      {/* <p
         style={{ color: "var(--color-text-muted)" }}
         className="text-center text-xs mt-6">
         First time setup?{" "}
@@ -127,7 +127,7 @@ export default function LoginForm() {
           className="hover:underline transition-colors">
           Create owner account
         </Link>
-      </p>
+      </p> */}
     </div>
   );
 }
