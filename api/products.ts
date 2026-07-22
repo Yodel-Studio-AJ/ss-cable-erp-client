@@ -10,6 +10,11 @@ export async function listAllProducts(): Promise<ProductWithGroup[]> {
   return data;
 }
 
+export async function getProduct(productId: string): Promise<ProductWithGroup> {
+  const { data } = await api.get<ProductWithGroup>(`/api/products/${productId}`);
+  return data;
+}
+
 export async function listGroupProducts(groupId: string): Promise<Product[]> {
   const { data } = await api.get<Product[]>(`/api/product-groups/${groupId}/products`);
   return data;

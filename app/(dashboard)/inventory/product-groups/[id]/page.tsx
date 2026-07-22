@@ -1703,40 +1703,87 @@ export default function ProductGroupDetailPage() {
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-[1fr_8rem_5rem_auto] items-center px-4 py-2 text-[11px] font-medium uppercase tracking-wider"
+            {/* Table header */}
+            <div className="grid grid-cols-[2.5rem_1fr_9rem_5rem_auto] items-center px-4 py-2 text-[11px] font-medium uppercase tracking-wider"
               style={{ color: "var(--color-text-muted)", borderBottom: "1px solid var(--color-border)" }}>
-              <span>Name</span>
+              <span className="text-center">#</span>
+              <span>Name / Attributes</span>
               <span>SKU</span>
               <span>Status</span>
               <span />
             </div>
             {products.map((p, idx) => {
               const qtyBasisAttr = attrs.find((a) => a.isQuantityBasis);
-              const qtyVal = qtyBasisAttr
-                ? p.attributeValues.find((v) => v.productGroupAttributeId === qtyBasisAttr.id)
-                : null;
+              // All simple (non-calculated, non-from-input) attribute values for display
+              const simpleVals = attrs
+                .filter((a) => !a.isFromInput)
+                .map((a) => {
+                  const v = p.attributeValues.find((av) => av.productGroupAttributeId === a.id);
+                  return v ? { attr: a, val: v } : null;
+                })
+                .filter(Boolean) as { attr: typeof attrs[0]; val: typeof p.attributeValues[0] }[];
+
               return (
                 <div key={p.id}
                   style={{ borderTop: idx > 0 ? "1px solid var(--color-border)" : undefined }}
-                  className="grid grid-cols-[1fr_8rem_5rem_auto] items-center px-4 py-3 gap-x-3">
-                  <div className="min-w-0">
-                    <p style={{ color: "var(--color-text-primary)" }} className="text-sm font-medium truncate">{p.name}</p>
-                    {qtyVal?.numericValue != null && qtyBasisAttr && (
-                      <p style={{ color: "var(--color-text-muted)" }} className="text-xs mt-0.5">
-                        {qtyBasisAttr.attribute.name}: <span className="font-mono">{qtyVal.numericValue}</span>
-                        {qtyBasisAttr.attribute.unit && <span className="ml-0.5">{qtyBasisAttr.attribute.unit}</span>}
-                      </p>
+                  className="grid grid-cols-[2.5rem_1fr_9rem_5rem_auto] items-center px-4 py-3 gap-x-3 hover:opacity-90 transition-opacity">
+                  {/* Row number */}
+                  <span className="text-center text-xs tabular-nums" style={{ color: "var(--color-text-muted)" }}>
+                    {idx + 1}
+                  </span>
+                  {/* Name + attribute chips */}
+                  <Link href={`/inventory/products/${p.id}`} className="min-w-0 group">
+                    <p style={{ color: "var(--color-text-primary)" }}
+                      className="text-sm font-medium truncate group-hover:underline underline-offset-2">
+                      {p.name}
+                    </p>
+                    {simpleVals.length > 0 && (
+                      <div className="flex flex-wrap gap-1.5 mt-1.5">
+                        {simpleVals.map(({ attr, val }) => (
+                          <span key={attr.id}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono"
+                            style={{
+                              backgroundColor: attr.isQuantityBasis
+                                ? "color-mix(in srgb, #8b5cf6 10%, transparent)"
+                                : "var(--color-bg-subtle)",
+                              color: attr.isQuantityBasis ? "#8b5cf6" : "var(--color-text-secondary)",
+                              border: `1px solid ${attr.isQuantityBasis ? "color-mix(in srgb, #8b5cf6 25%, transparent)" : "var(--color-border)"}`,
+                            }}>
+                            <span style={{ color: "var(--color-text-muted)", fontFamily: "inherit" }}
+                              className="text-[9px] not-italic normal-case font-sans mr-0.5">
+                              {attr.attribute.name}
+                            </span>
+                            {val.numericValue != null
+                              ? val.numericValue.toLocaleString("en-IN", { maximumFractionDigits: 4 })
+                              : (val.textValue ?? "—")}
+                            {attr.attribute.unit && (
+                              <span style={{ color: "var(--color-text-muted)", fontFamily: "inherit" }}
+                                className="font-sans ml-0.5 text-[9px]">
+                                {attr.attribute.unit}
+                              </span>
+                            )}
+                          </span>
+                        ))}
+                      </div>
                     )}
-                  </div>
+                  </Link>
+                  {/* SKU */}
                   <span style={{ color: "var(--color-text-secondary)" }} className="text-xs font-mono">
                     {p.sku ?? <span style={{ color: "var(--color-text-muted)" }}>—</span>}
                   </span>
+                  {/* Status */}
                   <span className="flex items-center gap-1 text-xs">
                     {p.isActive
                       ? <><CheckCircle size={11} className="text-green-500" /><span className="text-green-600">Active</span></>
                       : <><XCircle size={11} className="text-red-400" /><span className="text-red-500">Inactive</span></>}
                   </span>
+                  {/* Actions */}
                   <div className="flex items-center gap-0.5">
+                    <Link href={`/inventory/products/${p.id}`}
+                      style={{ color: "var(--color-text-muted)" }}
+                      className="p-1.5 rounded hover:opacity-70 transition-opacity">
+                      <Hash size={12} />
+                    </Link>
                     <button onClick={() => setProductModal({ type: "edit", product: p })}
                       style={{ color: "var(--color-text-muted)" }}
                       className="p-1.5 rounded hover:opacity-70 transition-opacity">
