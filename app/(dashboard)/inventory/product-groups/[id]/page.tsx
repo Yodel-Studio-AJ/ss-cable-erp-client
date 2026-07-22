@@ -5,16 +5,20 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft, Edit, Tag, Calendar, Plus, Pencil, Trash2,
-  FlaskConical, Star, ChevronUp, ChevronDown,
+  FlaskConical, Star, ChevronUp, ChevronDown, GitMerge,
 } from "lucide-react";
 import Modal from "@/components/ui/Modal";
-import { getProductGroup } from "@/api/productGroups";
+import { getProductGroup, getProductGroups } from "@/api/productGroups";
 import {
-  createAttribute,
+  createAttribute, getGroupAttributes,
   addGroupAttribute, updateGroupAttribute, removeGroupAttribute, reorderGroupAttributes,
 } from "@/api/attributes";
+import {
+  getGroupInputs, addGroupInput, updateGroupInput, removeGroupInput,
+} from "@/api/productGroupInputs";
 import type { ProductGroup, ProductGroupType, MaterialType } from "@/types/productGroup";
-import type { GroupAttribute, AddGroupAttributePayload, UpdateGroupAttributePayload } from "@/types/attribute";
+import type { GroupAttribute } from "@/types/attribute";
+import type { GroupInput, FormulaVar, FormulaVars } from "@/types/productGroupInput";
 import { effectiveAlias } from "@/types/attribute";
 import { PRODUCT_GROUP_TYPE_LABELS, MATERIAL_TYPE_LABELS } from "@/types/productGroup";
 import type { AxiosError } from "axios";
@@ -417,26 +421,450 @@ function AttributeModal({ mode, productGroupId, existingAttrs, onSaved, onClose 
   );
 }
 
+// ─── formula display ─────────────────────────────────────────────────────────
+
+function tokenizeFormula(formula: string): Array<{ type: "id" | "other"; text: string }> {
+  const parts: Array<{ type: "id" | "other"; text: string }> = [];
+  const re = /([a-zA-Z_]\w*)|([^a-zA-Z_]+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(formula)) !== null) {
+    if (m[1]) parts.push({ type: "id", text: m[1] });
+    else parts.push({ type: "other", text: m[2] });
+  }
+  return parts;
+}
+
+function FormulaDisplay({
+  formula,
+  formulaVars,
+  outputGroupId,
+}: {
+  formula:      string;
+  formulaVars:  FormulaVars | null;
+  outputGroupId: string;
+}) {
+  const tokens = tokenizeFormula(formula);
+  return (
+    <span className="text-xs font-mono break-all">
+      {tokens.map((t, i) => {
+        if (t.type === "id" && formulaVars?.[t.text]) {
+          const fv        = formulaVars[t.text];
+          const isOutput  = fv.groupId === outputGroupId;
+          return (
+            <span
+              key={i}
+              title={`${fv.attrName} · from ${fv.groupName}`}
+              className="rounded px-0.5"
+              style={{
+                backgroundColor: isOutput
+                  ? "color-mix(in srgb, #6366f1 14%, transparent)"
+                  : "color-mix(in srgb, #10b981 14%, transparent)",
+                color: isOutput ? "#6366f1" : "#10b981",
+              }}
+            >
+              {t.text}
+            </span>
+          );
+        }
+        return (
+          <span key={i} style={{ color: "var(--color-text-secondary)" }}>{t.text}</span>
+        );
+      })}
+    </span>
+  );
+}
+
+// ─── BOM input modal ──────────────────────────────────────────────────────────
+
+type BomMode =
+  | { type: "add"; outputAttrs: GroupAttribute[]; outputGroupName: string }
+  | { type: "edit"; item: GroupInput; outputAttrs: GroupAttribute[]; outputGroupName: string };
+
+interface BomInputModalProps {
+  mode:           BomMode;
+  productGroupId: string;
+  allGroups:      ProductGroup[];
+  onSaved:        (gi: GroupInput) => void;
+  onClose:        () => void;
+}
+
+function BomInputModal({ mode, productGroupId, allGroups, onSaved, onClose }: BomInputModalProps) {
+  const isEdit = mode.type === "edit";
+  const item   = isEdit ? mode.item : null;
+
+  const outputAttrs      = mode.outputAttrs;
+  const outputGroupName  = mode.outputGroupName;
+
+  const [inputGroupId,    setInputGroupId]   = useState(item?.inputGroupId ?? "");
+  const [qtyFormula,      setQtyFormula]     = useState(item?.qtyFormula ?? "");
+  const [formulaVars,     setFormulaVars]    = useState<FormulaVars>(item?.formulaVars ?? {});
+  const [yieldFactor,     setYieldFactor]    = useState(String(item?.yieldFactor ?? "1"));
+  const [label,           setLabel]          = useState(item?.label ?? "");
+  const [notes,           setNotes]          = useState(item?.notes ?? "");
+  const [saving,          setSaving]         = useState(false);
+  const [error,           setError]          = useState<string | null>(null);
+  const [inputGroupAttrs, setInputGroupAttrs] = useState<GroupAttribute[]>([]);
+  const [loadingAttrs,    setLoadingAttrs]   = useState(false);
+
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const cursorRef   = useRef({ start: (item?.qtyFormula ?? "").length, end: (item?.qtyFormula ?? "").length });
+
+  const chosenGroup = allGroups.find((g) => g.id === inputGroupId);
+
+  useEffect(() => {
+    if (!inputGroupId) { setInputGroupAttrs([]); return; }
+    let cancelled = false;
+    setLoadingAttrs(true);
+    getGroupAttributes(inputGroupId)
+      .then((attrs) => { if (!cancelled) { setInputGroupAttrs(attrs); setLoadingAttrs(false); } })
+      .catch(() => { if (!cancelled) setLoadingAttrs(false); });
+    return () => { cancelled = true; };
+  }, [inputGroupId]);
+
+  function saveCursor() {
+    const el = textareaRef.current;
+    if (el) cursorRef.current = { start: el.selectionStart, end: el.selectionEnd };
+  }
+
+  function insertAtCursor(text: string) {
+    const { start, end } = cursorRef.current;
+    const next = qtyFormula.slice(0, start) + text + qtyFormula.slice(end);
+    setQtyFormula(next);
+    const pos = start + text.length;
+    cursorRef.current = { start: pos, end: pos };
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (el) { el.focus(); el.setSelectionRange(pos, pos); }
+    });
+  }
+
+  function clickOutputChip(ga: GroupAttribute) {
+    const alias = effectiveAlias(ga);
+    insertAtCursor(alias);
+    setFormulaVars((prev) => ({
+      ...prev,
+      [alias]: { pgaId: ga.id, groupId: productGroupId, groupName: outputGroupName, attrName: ga.attribute.name },
+    }));
+  }
+
+  function clickInputChip(ga: GroupAttribute) {
+    if (!chosenGroup) return;
+    const alias = effectiveAlias(ga);
+    insertAtCursor(alias);
+    setFormulaVars((prev) => ({
+      ...prev,
+      [alias]: { pgaId: ga.id, groupId: chosenGroup.id, groupName: chosenGroup.name, attrName: ga.attribute.name },
+    }));
+  }
+
+  const OPERATORS = ["+", "−", "×", "÷", "(", ")", "^"] as const;
+  const OP_MAP: Record<string, string> = {
+    "+": "+", "−": "-", "×": "*", "÷": "/", "(": "(", ")": ")", "^": "**",
+  };
+
+  async function handleSave() {
+    if (!inputGroupId) { setError("Select an input product group."); return; }
+    if (!qtyFormula.trim()) { setError("Formula is required."); return; }
+    const yf = parseFloat(yieldFactor);
+    if (isNaN(yf) || yf <= 0 || yf > 1) { setError("Yield factor must be between 0 and 1."); return; }
+    setSaving(true); setError(null);
+    const fv = Object.keys(formulaVars).length > 0 ? formulaVars : null;
+    try {
+      if (isEdit) {
+        const updated = await updateGroupInput(productGroupId, item!.id, {
+          qtyFormula:  qtyFormula.trim(),
+          formulaVars: fv,
+          yieldFactor: yf,
+          label:       label.trim() || null,
+          notes:       notes.trim() || null,
+        });
+        onSaved(updated);
+      } else {
+        const created = await addGroupInput(productGroupId, {
+          inputGroupId,
+          qtyFormula:  qtyFormula.trim(),
+          formulaVars: fv ?? undefined,
+          yieldFactor: yf,
+          label:       label.trim() || undefined,
+          notes:       notes.trim() || undefined,
+        });
+        onSaved(created);
+      }
+      onClose();
+    } catch (err) {
+      const e = err as AxiosError<{ message?: string }>;
+      setError(e.response?.data?.message ?? "Failed to save.");
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal
+      title={isEdit ? `Edit Input — ${item!.inputGroup.name}` : "Add Input Material"}
+      onClose={onClose}
+      width="max-w-xl"
+    >
+      <div className="space-y-4">
+        {error && (
+          <p className="text-red-500 text-xs bg-red-500/10 border border-red-500/20 rounded px-3 py-2">{error}</p>
+        )}
+
+        {/* Input group selector */}
+        {isEdit ? (
+          <div style={{ backgroundColor: "var(--color-bg-input)", borderColor: "var(--color-border)" }}
+            className="border rounded-lg px-3 py-2 flex items-center gap-2">
+            <GitMerge size={13} style={{ color: "var(--color-text-muted)" }} />
+            <span style={{ color: "var(--color-text-primary)" }} className="text-sm font-medium">
+              {item!.inputGroup.name}
+            </span>
+            <span style={{ color: "var(--color-text-muted)" }} className="text-xs ml-1">
+              ({PRODUCT_GROUP_TYPE_LABELS[item!.inputGroup.type]})
+            </span>
+          </div>
+        ) : (
+          <div>
+            <label style={{ color: "var(--color-text-muted)" }} className="block text-xs mb-1">
+              Input Product Group *
+            </label>
+            <select
+              value={inputGroupId}
+              onChange={(e) => setInputGroupId(e.target.value)}
+              style={{ backgroundColor: "var(--color-bg-input)", borderColor: "var(--color-border-input)", color: "var(--color-text-primary)" }}
+              className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none"
+            >
+              <option value="">Select a product group…</option>
+              {allGroups
+                .filter((g) => g.id !== productGroupId)
+                .map((g) => (
+                  <option key={g.id} value={g.id}>{g.name}</option>
+                ))}
+            </select>
+          </div>
+        )}
+
+        {/* Label + yield factor */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label style={{ color: "var(--color-text-muted)" }} className="block text-xs mb-1">
+              Label <span className="opacity-60">(if multiple inputs from same group)</span>
+            </label>
+            <input
+              type="text"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="e.g. 4sq mm wire"
+              style={{ backgroundColor: "var(--color-bg-input)", borderColor: "var(--color-border-input)", color: "var(--color-text-primary)" }}
+              className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none"
+            />
+          </div>
+          <div>
+            <label style={{ color: "var(--color-text-muted)" }} className="block text-xs mb-1">
+              Yield Factor <span className="opacity-60">(0–1, losses)</span>
+            </label>
+            <input
+              type="number"
+              value={yieldFactor}
+              onChange={(e) => setYieldFactor(e.target.value)}
+              min={0.01} max={1} step={0.01}
+              placeholder="0.97"
+              style={{ backgroundColor: "var(--color-bg-input)", borderColor: "var(--color-border-input)", color: "var(--color-text-primary)" }}
+              className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none"
+            />
+          </div>
+        </div>
+
+        {/* Formula builder */}
+        <div>
+          <label style={{ color: "var(--color-text-muted)" }} className="block text-xs mb-2">
+            Quantity Formula *
+            <span className="ml-1 opacity-60">— result = qty of input needed (in input group's stock unit)</span>
+          </label>
+
+          {/* Output group chips — indigo */}
+          {outputAttrs.length > 0 && (
+            <div className="mb-3 rounded-lg p-2.5" style={{ backgroundColor: "color-mix(in srgb, #6366f1 6%, transparent)", border: "1px solid color-mix(in srgb, #6366f1 25%, transparent)" }}>
+              <p className="text-[11px] mb-1.5 font-semibold" style={{ color: "#6366f1" }}>
+                {outputGroupName} <span className="font-normal opacity-70">(output)</span>
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {outputAttrs.map((a) => {
+                  const alias = effectiveAlias(a);
+                  return (
+                    <button
+                      key={a.id}
+                      draggable
+                      onDragStart={(e) => { e.dataTransfer.setData("text/plain", alias); e.dataTransfer.effectAllowed = "copy"; }}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => clickOutputChip(a)}
+                      title={`${a.attribute.name}${a.attribute.unit ? ` (${a.attribute.unit})` : ""}\nSource: ${outputGroupName}`}
+                      className="px-2 py-0.5 rounded text-xs font-mono hover:opacity-70 transition-opacity select-none border"
+                      style={{ backgroundColor: "color-mix(in srgb, #6366f1 15%, transparent)", borderColor: "#6366f1", color: "#6366f1" }}
+                    >
+                      {alias}
+                      {a.attribute.unit && <span className="ml-1 font-sans" style={{ opacity: 0.7 }}>({a.attribute.unit})</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Input group chips — emerald */}
+          {inputGroupId && (
+            <div className="mb-3 rounded-lg p-2.5" style={{ backgroundColor: "color-mix(in srgb, #10b981 6%, transparent)", border: "1px solid color-mix(in srgb, #10b981 25%, transparent)" }}>
+              {loadingAttrs ? (
+                <p className="text-[11px]" style={{ color: "#10b981" }}>Loading…</p>
+              ) : (
+                <>
+                  <p className="text-[11px] mb-1.5 font-semibold" style={{ color: "#10b981" }}>
+                    {chosenGroup?.name ?? "Input group"} <span className="font-normal opacity-70">(input)</span>
+                  </p>
+                  {inputGroupAttrs.length === 0 ? (
+                    <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+                      No attributes defined for this group.
+                    </p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5">
+                      {inputGroupAttrs.map((a) => {
+                        const alias = effectiveAlias(a);
+                        return (
+                          <button
+                            key={a.id}
+                            draggable
+                            onDragStart={(e) => { e.dataTransfer.setData("text/plain", alias); e.dataTransfer.effectAllowed = "copy"; }}
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => clickInputChip(a)}
+                            title={`${a.attribute.name}${a.attribute.unit ? ` (${a.attribute.unit})` : ""}\nSource: ${chosenGroup?.name}`}
+                            className="px-2 py-0.5 rounded text-xs font-mono hover:opacity-70 transition-opacity select-none border"
+                            style={{ backgroundColor: "color-mix(in srgb, #10b981 15%, transparent)", borderColor: "#10b981", color: "#10b981" }}
+                          >
+                            {alias}
+                            {a.attribute.unit && <span className="ml-1 font-sans" style={{ opacity: 0.7 }}>({a.attribute.unit})</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Operator buttons */}
+          <div className="flex flex-wrap gap-1 mb-2">
+            {OPERATORS.map((op) => (
+              <button
+                key={op}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => insertAtCursor(OP_MAP[op])}
+                style={{ borderColor: "var(--color-border)", color: "var(--color-text-secondary)", backgroundColor: "var(--color-bg-input)" }}
+                className="w-8 h-7 flex items-center justify-center border rounded text-sm font-mono hover:opacity-70 transition-opacity"
+              >
+                {op}
+              </button>
+            ))}
+            <button
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => insertAtCursor(" ")}
+              style={{ borderColor: "var(--color-border)", color: "var(--color-text-muted)", backgroundColor: "var(--color-bg-input)" }}
+              className="px-2 h-7 border rounded text-[11px] hover:opacity-70 transition-opacity"
+            >
+              space
+            </button>
+          </div>
+
+          <textarea
+            ref={textareaRef}
+            value={qtyFormula}
+            onChange={(e) => { setQtyFormula(e.target.value); saveCursor(); }}
+            onSelect={saveCursor} onKeyUp={saveCursor} onClick={saveCursor} onBlur={saveCursor}
+            placeholder="e.g. density * cross_section * length / 1000000"
+            rows={3}
+            style={{ backgroundColor: "var(--color-bg-input)", borderColor: "var(--color-border-input)", color: "var(--color-text-primary)" }}
+            className="w-full border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none resize-none"
+          />
+
+          {/* Tracked vars summary */}
+          {Object.keys(formulaVars).length > 0 && (
+            <div className="mt-2 rounded-lg px-3 py-2 text-[11px] space-y-1"
+              style={{ backgroundColor: "var(--color-bg-nav-active)", border: "1px solid var(--color-border)" }}>
+              <p className="font-medium" style={{ color: "var(--color-text-muted)" }}>Tracked variables:</p>
+              {Object.entries(formulaVars).map(([alias, fv]) => {
+                const isOutput = fv.groupId === productGroupId;
+                return (
+                  <div key={alias} className="flex items-center gap-1.5">
+                    <code className="font-mono px-1 rounded" style={{
+                      backgroundColor: isOutput ? "color-mix(in srgb, #6366f1 14%, transparent)" : "color-mix(in srgb, #10b981 14%, transparent)",
+                      color: isOutput ? "#6366f1" : "#10b981",
+                    }}>{alias}</code>
+                    <span style={{ color: "var(--color-text-muted)" }}>→</span>
+                    <span style={{ color: "var(--color-text-muted)" }}>{fv.groupName} · {fv.attrName}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Notes */}
+        <div>
+          <label style={{ color: "var(--color-text-muted)" }} className="block text-xs mb-1">Notes</label>
+          <input
+            type="text"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            placeholder="e.g. Drawing process, 3% loss"
+            style={{ backgroundColor: "var(--color-bg-input)", borderColor: "var(--color-border-input)", color: "var(--color-text-primary)" }}
+            className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none"
+          />
+        </div>
+
+        <div className="flex gap-2 pt-1">
+          <button onClick={onClose}
+            style={{ borderColor: "var(--color-border)", color: "var(--color-text-secondary)" }}
+            className="flex-1 border rounded-lg py-2 text-sm hover:opacity-70 transition-opacity">
+            Cancel
+          </button>
+          <button onClick={handleSave} disabled={saving}
+            style={{ backgroundColor: "var(--color-btn-bg)", color: "var(--color-btn-text)" }}
+            className="flex-1 rounded-lg py-2 text-sm font-medium hover:opacity-80 transition-opacity disabled:opacity-40">
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ─── main page ────────────────────────────────────────────────────────────────
 
 export default function ProductGroupDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
 
-  const [group, setGroup]   = useState<ProductGroup | null>(null);
-  const [attrs, setAttrs]   = useState<GroupAttribute[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError]   = useState<string | null>(null);
-  const [modal, setModal]   = useState<ModalMode | null>(null);
+  const [group, setGroup]       = useState<ProductGroup | null>(null);
+  const [attrs, setAttrs]       = useState<GroupAttribute[]>([]);
+  const [inputs, setInputs]     = useState<GroupInput[]>([]);
+  const [allGroups, setAllGroups] = useState<ProductGroup[]>([]);
+  const [loading, setLoading]   = useState(true);
+  const [error, setError]       = useState<string | null>(null);
+  const [modal, setModal]       = useState<ModalMode | null>(null);
+  const [bomModal, setBomModal] = useState<BomMode | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
-        const g = await getProductGroup(id);
+        const [g, allGrps, inp] = await Promise.all([
+          getProductGroup(id),
+          getProductGroups(),
+          getGroupInputs(id),
+        ]);
         if (!cancelled) {
           setGroup(g);
           setAttrs(g.attributes ?? []);
+          setAllGroups(allGrps);
+          setInputs(inp);
         }
       } catch {
         if (!cancelled) setError("Failed to load product group.");
@@ -473,6 +901,24 @@ export default function ProductGroupDetailPage() {
       setAttrs((prev) => prev.filter((a) => a.id !== pgaId));
     } catch {
       setError("Failed to remove attribute.");
+    }
+  }
+
+  function handleBomSaved(gi: GroupInput) {
+    setInputs((prev) => {
+      const idx = prev.findIndex((e) => e.id === gi.id);
+      if (idx >= 0) { const next = [...prev]; next[idx] = gi; return next; }
+      return [...prev, gi];
+    });
+  }
+
+  async function handleRemoveBomInput(inputId: string) {
+    if (!confirm("Remove this input material from the BOM?")) return;
+    try {
+      await removeGroupInput(id, inputId);
+      setInputs((prev) => prev.filter((i) => i.id !== inputId));
+    } catch {
+      setError("Failed to remove BOM input.");
     }
   }
 
@@ -700,6 +1146,117 @@ export default function ProductGroupDetailPage() {
         )}
       </div>
 
+      {/* BOM Inputs section */}
+      <div style={{ backgroundColor: "var(--color-bg-popup)", borderColor: "var(--color-border)" }}
+        className="border rounded-lg overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3"
+          style={{ borderBottom: "1px solid var(--color-border)" }}>
+          <div className="flex items-center gap-2">
+            <GitMerge size={14} style={{ color: "var(--color-text-muted)" }} />
+            <p style={{ color: "var(--color-text-primary)" }} className="text-sm font-semibold">Input Materials</p>
+            <span style={{ color: "var(--color-text-muted)" }} className="text-xs">({inputs.length})</span>
+            <span style={{ color: "var(--color-text-muted)" }} className="text-[11px]">— consumed to produce this group</span>
+          </div>
+          <button
+            onClick={() => setBomModal({ type: "add", outputAttrs: attrs, outputGroupName: group.name })}
+            style={{ backgroundColor: "var(--color-btn-bg)", color: "var(--color-btn-text)" }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium hover:opacity-80 transition-opacity"
+          >
+            <Plus size={12} /> Add Input
+          </button>
+        </div>
+
+        {inputs.length === 0 ? (
+          <div style={{ color: "var(--color-text-muted)" }} className="text-sm text-center py-8">
+            {group.isProcured
+              ? "This group is procured externally — no inputs needed."
+              : <>No input materials yet.{" "}
+                  <button onClick={() => setBomModal({ type: "add", outputAttrs: attrs, outputGroupName: group.name })} className="underline hover:opacity-70">Add one.</button>
+                </>
+            }
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-[1fr_auto_6rem_auto] items-center px-4 py-2 text-[11px] font-medium uppercase tracking-wider"
+              style={{ color: "var(--color-text-muted)", borderBottom: "1px solid var(--color-border)" }}>
+              <span>Input Group</span>
+              <span className="pr-8">Formula</span>
+              <span>Yield</span>
+              <span />
+            </div>
+
+            {inputs.map((gi, idx) => (
+              <div key={gi.id}
+                style={{ borderTop: idx > 0 ? "1px solid var(--color-border)" : undefined }}
+                className="grid grid-cols-[1fr_auto_6rem_auto] items-start px-4 py-3 gap-x-4">
+
+                {/* Input group + label */}
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span style={{ color: "var(--color-text-primary)" }} className="text-sm font-medium">
+                      {gi.inputGroup.name}
+                    </span>
+                    {gi.label && (
+                      <span style={{ backgroundColor: "var(--color-bg-nav-active)", color: "var(--color-text-secondary)" }}
+                        className="text-[11px] px-1.5 py-0.5 rounded font-medium">
+                        {gi.label}
+                      </span>
+                    )}
+                    <span style={{ color: "var(--color-text-muted)" }} className="text-[11px]">
+                      ({PRODUCT_GROUP_TYPE_LABELS[gi.inputGroup.type]})
+                    </span>
+                  </div>
+                  {gi.notes && (
+                    <p style={{ color: "var(--color-text-muted)" }} className="text-xs mt-0.5">{gi.notes}</p>
+                  )}
+                </div>
+
+                {/* Formula */}
+                <div className="min-w-0 max-w-xs px-1.5 py-0.5 rounded"
+                  style={{ backgroundColor: "var(--color-bg-input)" }}>
+                  <FormulaDisplay
+                    formula={gi.qtyFormula}
+                    formulaVars={gi.formulaVars}
+                    outputGroupId={id}
+                  />
+                </div>
+
+                {/* Yield */}
+                <div>
+                  <span style={{ color: parseFloat(gi.yieldFactor) < 1 ? undefined : "var(--color-text-muted)" }}
+                    className={`text-xs font-medium ${parseFloat(gi.yieldFactor) < 1 ? "text-amber-600" : ""}`}>
+                    {parseFloat(gi.yieldFactor) === 1
+                      ? "100%"
+                      : `${(parseFloat(gi.yieldFactor) * 100).toFixed(1)}%`
+                    }
+                  </span>
+                  {parseFloat(gi.yieldFactor) < 1 && (
+                    <p style={{ color: "var(--color-text-muted)" }} className="text-[10px]">
+                      {((1 - parseFloat(gi.yieldFactor)) * 100).toFixed(1)}% loss
+                    </p>
+                  )}
+                </div>
+
+                {/* Actions */}
+                <div className="flex items-center gap-0.5">
+                  <button
+                    onClick={() => setBomModal({ type: "edit", item: gi, outputAttrs: attrs, outputGroupName: group.name })}
+                    style={{ color: "var(--color-text-muted)" }}
+                    className="p-1.5 rounded hover:opacity-70 transition-opacity">
+                    <Pencil size={12} />
+                  </button>
+                  <button
+                    onClick={() => handleRemoveBomInput(gi.id)}
+                    className="p-1.5 rounded text-red-400 hover:opacity-70 transition-opacity">
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+
       {modal && (
         <AttributeModal
           mode={modal}
@@ -707,6 +1264,16 @@ export default function ProductGroupDetailPage() {
           existingAttrs={attrs}
           onSaved={handleAttrSaved}
           onClose={() => setModal(null)}
+        />
+      )}
+
+      {bomModal && (
+        <BomInputModal
+          mode={bomModal}
+          productGroupId={id}
+          allGroups={allGroups}
+          onSaved={handleBomSaved}
+          onClose={() => setBomModal(null)}
         />
       )}
     </div>
