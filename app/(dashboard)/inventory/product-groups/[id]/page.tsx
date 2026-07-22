@@ -17,7 +17,7 @@ import {
   getGroupInputs, addGroupInput, updateGroupInput, removeGroupInput,
 } from "@/api/productGroupInputs";
 import type { ProductGroup, ProductGroupType, MaterialType } from "@/types/productGroup";
-import type { GroupAttribute } from "@/types/attribute";
+import type { GroupAttribute, AttrFormulaVar, AttrFormulaVars } from "@/types/attribute";
 import type { GroupInput, FormulaVar, FormulaVars } from "@/types/productGroupInput";
 import { effectiveAlias } from "@/types/attribute";
 import { PRODUCT_GROUP_TYPE_LABELS, MATERIAL_TYPE_LABELS } from "@/types/productGroup";
@@ -58,224 +58,149 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-// ─── formula builder ──────────────────────────────────────────────────────────
-
-const OPERATORS = ['+', '−', '×', '÷', '(', ')', '^'] as const;
-const OP_INSERT: Record<string, string> = {
-  '+': '+', '−': '-', '×': '*', '÷': '/', '(': '(', ')': ')', '^': '**',
-};
-
-interface SiblingVar {
-  alias: string;
-  name:  string;
-  unit:  string | null;
-}
-
-function FormulaBuilder({
-  value,
-  onChange,
-  siblings,
-}: {
-  value:    string;
-  onChange: (v: string) => void;
-  siblings: SiblingVar[];
-}) {
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const cursorRef   = useRef({ start: value.length, end: value.length });
-  const [dragOver, setDragOver] = useState(false);
-
-  function saveCursor() {
-    const el = textareaRef.current;
-    if (el) cursorRef.current = { start: el.selectionStart, end: el.selectionEnd };
-  }
-
-  function insertAt(text: string) {
-    const { start, end } = cursorRef.current;
-    const next = value.slice(0, start) + text + value.slice(end);
-    onChange(next);
-    const pos = start + text.length;
-    cursorRef.current = { start: pos, end: pos };
-    requestAnimationFrame(() => {
-      const el = textareaRef.current;
-      if (el) { el.focus(); el.setSelectionRange(pos, pos); }
-    });
-  }
-
-  return (
-    <div className="space-y-2">
-      {/* Attribute variable chips */}
-      {siblings.length > 0 ? (
-        <div>
-          <p style={{ color: "var(--color-text-muted)" }} className="text-[11px] mb-1.5">
-            Attributes — click or drag into formula
-          </p>
-          <div className="flex flex-wrap gap-1.5">
-            {siblings.map((s) => (
-              <button
-                key={s.alias}
-                draggable
-                onDragStart={(e) => {
-                  e.dataTransfer.setData("text/plain", s.alias);
-                  e.dataTransfer.effectAllowed = "copy";
-                }}
-                onMouseDown={(e) => e.preventDefault()} // keep textarea focus
-                onClick={() => insertAt(s.alias)}
-                title={`${s.name}${s.unit ? ` (${s.unit})` : ""}`}
-                style={{
-                  backgroundColor: "var(--color-bg-nav-active)",
-                  borderColor:     "var(--color-border)",
-                  color:           "var(--color-text-primary)",
-                  cursor:          "grab",
-                }}
-                className="px-2 py-0.5 border rounded text-xs font-mono hover:opacity-70 transition-opacity select-none">
-                {s.alias}
-                {s.unit && (
-                  <span style={{ color: "var(--color-text-muted)" }} className="ml-1 font-sans">
-                    ({s.unit})
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
-        </div>
-      ) : (
-        <p style={{ color: "var(--color-text-muted)" }} className="text-[11px]">
-          Add other (non-calculated) attributes to this group first to use them in formulas.
-        </p>
-      )}
-
-      {/* Operator buttons */}
-      <div className="flex flex-wrap gap-1">
-        {OPERATORS.map((op) => (
-          <button
-            key={op}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => insertAt(OP_INSERT[op])}
-            style={{
-              borderColor:     "var(--color-border)",
-              color:           "var(--color-text-secondary)",
-              backgroundColor: "var(--color-bg-input)",
-            }}
-            className="w-8 h-7 flex items-center justify-center border rounded text-sm font-mono hover:opacity-70 transition-opacity">
-            {op}
-          </button>
-        ))}
-        <button
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => insertAt(" ")}
-          style={{
-            borderColor:     "var(--color-border)",
-            color:           "var(--color-text-muted)",
-            backgroundColor: "var(--color-bg-input)",
-          }}
-          className="px-2 h-7 border rounded text-[11px] hover:opacity-70 transition-opacity">
-          space
-        </button>
-      </div>
-
-      {/* Formula textarea — accepts native drag-and-drop of text/plain */}
-      <div
-        style={{
-          borderColor:     dragOver ? "var(--color-btn-bg)" : "var(--color-border-input)",
-          backgroundColor: "var(--color-bg-input)",
-        }}
-        className="border rounded-lg overflow-hidden transition-colors">
-        <textarea
-          ref={textareaRef}
-          value={value}
-          onChange={(e) => { onChange(e.target.value); saveCursor(); }}
-          onSelect={saveCursor}
-          onKeyUp={saveCursor}
-          onClick={saveCursor}
-          onBlur={saveCursor}
-          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
-          onDragLeave={() => setDragOver(false)}
-          onDrop={() => { setDragOver(false); }}
-          placeholder="e.g. weight / (density * cross_section)"
-          rows={3}
-          style={{ color: "var(--color-text-primary)", backgroundColor: "transparent" }}
-          className="w-full px-3 py-2 text-sm font-mono focus:outline-none resize-none"
-        />
-      </div>
-    </div>
-  );
-}
-
 // ─── attribute modal ──────────────────────────────────────────────────────────
 
 type ModalMode = { type: "add" } | { type: "edit"; ga: GroupAttribute };
 
 interface AttrModalProps {
-  mode: ModalMode;
+  mode:           ModalMode;
   productGroupId: string;
-  existingAttrs: GroupAttribute[];
-  onSaved: (ga: GroupAttribute) => void;
-  onClose: () => void;
+  existingAttrs:  GroupAttribute[];
+  bomInputs:      GroupInput[];
+  onSaved:        (ga: GroupAttribute) => void;
+  onClose:        () => void;
 }
 
-function AttributeModal({ mode, productGroupId, existingAttrs, onSaved, onClose }: AttrModalProps) {
+function AttributeModal({ mode, productGroupId, existingAttrs, bomInputs, onSaved, onClose }: AttrModalProps) {
   const isEdit = mode.type === "edit";
-  const ga = isEdit ? mode.ga : null;
+  const ga     = isEdit ? mode.ga : null;
 
-  // Attribute definition (for add; readonly when editing)
-  const [name, setName]     = useState("");
-  const [unit, setUnit]     = useState("");
+  const [name, setName]         = useState("");
+  const [unit, setUnit]         = useState("");
   const [dataType, setDataType] = useState<"string" | "number">("number");
 
-  // Three mutually exclusive kinds
-  type AttrKind = "simple" | "qty_basis" | "calculated";
+  type AttrKind = "simple" | "qty_basis" | "calculated" | "from_input";
   function detectKind(g: GroupAttribute | null): AttrKind {
     if (!g) return "simple";
-    if (g.isCalculated) return "calculated";
+    if (g.isFromInput)     return "from_input";
+    if (g.isCalculated)    return "calculated";
     if (g.isQuantityBasis) return "qty_basis";
     return "simple";
   }
-  const [kind, setKind]                 = useState<AttrKind>(detectKind(ga));
+
+  const [kind,         setKind]         = useState<AttrKind>(detectKind(ga));
   const [formulaAlias, setFormulaAlias] = useState(ga?.formulaAlias ?? "");
-  const [formula, setFormula]           = useState(ga?.formula ?? "");
-  const [sortOrder, setSortOrder]       = useState(ga?.sortOrder ?? existingAttrs.length);
+  const [formula,      setFormula]      = useState(ga?.formula ?? "");
+  const [attrFVars,    setAttrFVars]    = useState<AttrFormulaVars>(ga?.formulaVars ?? {});
+  const [sortOrder,    setSortOrder]    = useState(ga?.sortOrder ?? existingAttrs.length);
+
+  // input group attrs for "from_input" formula builder — keyed by groupId
+  const [inputGroupAttrMap, setInputGroupAttrMap] = useState<Record<string, { groupName: string; attrs: GroupAttribute[] }>>({});
+  const [loadingInputAttrs, setLoadingInputAttrs] = useState(false);
+
+  useEffect(() => {
+    if (kind !== "from_input" || bomInputs.length === 0) { setInputGroupAttrMap({}); return; }
+    let cancelled = false;
+    setLoadingInputAttrs(true);
+    Promise.all(
+      bomInputs.map((bi) =>
+        getGroupAttributes(bi.inputGroupId).then((attrs) => ({
+          groupId:   bi.inputGroupId,
+          groupName: bi.inputGroup.name,
+          attrs,
+        }))
+      )
+    ).then((results) => {
+      if (cancelled) return;
+      const map: Record<string, { groupName: string; attrs: GroupAttribute[] }> = {};
+      for (const r of results) map[r.groupId] = { groupName: r.groupName, attrs: r.attrs };
+      setInputGroupAttrMap(map);
+      setLoadingInputAttrs(false);
+    }).catch(() => { if (!cancelled) setLoadingInputAttrs(false); });
+    return () => { cancelled = true; };
+  }, [kind, bomInputs]);
 
   const isCalculated    = kind === "calculated";
   const isQuantityBasis = kind === "qty_basis";
+  const isFromInput     = kind === "from_input";
 
   const [saving, setSaving] = useState(false);
-  const [error, setError]   = useState<string | null>(null);
+  const [error,  setError]  = useState<string | null>(null);
 
-  // siblings available as formula variables (exclude self when editing)
-  const siblings = (isEdit
-    ? existingAttrs.filter((e) => e.id !== ga!.id)
-    : existingAttrs
-  ).map((s) => ({
-    alias: effectiveAlias(s),
-    name:  s.attribute.name,
-    unit:  s.attribute.unit,
-  }));
+  // shared textarea ref for both Calculated and From Input formula builders
+  const formulaTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const formulaCursorRef   = useRef({ start: (ga?.formula ?? "").length, end: (ga?.formula ?? "").length });
+
+  const siblingAttrs = isEdit ? existingAttrs.filter((e) => e.id !== ga!.id) : existingAttrs;
+
+  function saveFormulaCursor() {
+    const el = formulaTextareaRef.current;
+    if (el) formulaCursorRef.current = { start: el.selectionStart, end: el.selectionEnd };
+  }
+
+  function insertAtFormulaCursor(text: string) {
+    const { start, end } = formulaCursorRef.current;
+    const next = formula.slice(0, start) + text + formula.slice(end);
+    setFormula(next);
+    const pos = start + text.length;
+    formulaCursorRef.current = { start: pos, end: pos };
+    requestAnimationFrame(() => {
+      const el = formulaTextareaRef.current;
+      if (el) { el.focus(); el.setSelectionRange(pos, pos); }
+    });
+  }
+
+  function clickSiblingChip(ga_: GroupAttribute) {
+    const token = pgaToken(ga_.id);
+    insertAtFormulaCursor(token);
+    setAttrFVars((prev) => ({
+      ...prev,
+      [token]: { pgaId: ga_.id, groupId: productGroupId, groupName: "This group", attrName: ga_.attribute.name, alias: effectiveAlias(ga_) },
+    }));
+  }
+
+  function clickInputAttrChip(a: GroupAttribute, groupId: string, groupName: string) {
+    const token = pgaToken(a.id);
+    insertAtFormulaCursor(token);
+    setAttrFVars((prev) => ({
+      ...prev,
+      [token]: { pgaId: a.id, groupId, groupName, attrName: a.attribute.name, alias: effectiveAlias(a) },
+    }));
+  }
+
+  const FORMULA_OPS = ["+", "−", "×", "÷", "(", ")", "^"] as const;
+  const FORMULA_OP_MAP: Record<string, string> = { "+": "+", "−": "-", "×": "*", "÷": "/", "(": "(", ")": ")", "^": "**" };
 
   async function handleSave() {
+    if ((isCalculated || isFromInput) && !formula.trim()) {
+      setError("Formula is required."); return;
+    }
     setSaving(true); setError(null);
+    const hasFormula = isCalculated || isFromInput;
+    const fv = Object.keys(attrFVars).length > 0 ? attrFVars : null;
     try {
       if (isEdit) {
         const updated = await updateGroupAttribute(productGroupId, ga!.id, {
           formulaAlias:    formulaAlias.trim() || null,
           isCalculated,
-          formula:         isCalculated ? (formula.trim() || null) : null,
+          formula:         hasFormula ? (formula.trim() || null) : null,
           isQuantityBasis,
+          isFromInput,
+          formulaVars:     hasFormula ? fv : null,
           sortOrder,
         });
         onSaved(updated);
       } else {
         if (!name.trim()) { setError("Attribute name is required."); setSaving(false); return; }
-        const created = await createAttribute({
-          name:     name.trim(),
-          unit:     unit.trim() || undefined,
-          dataType,
-        });
+        const created = await createAttribute({ name: name.trim(), unit: unit.trim() || undefined, dataType });
         const added = await addGroupAttribute(productGroupId, {
           attributeId:     created.id,
           formulaAlias:    formulaAlias.trim() || undefined,
           isCalculated,
-          formula:         isCalculated ? (formula.trim() || undefined) : undefined,
+          formula:         hasFormula ? (formula.trim() || undefined) : undefined,
           isQuantityBasis,
+          isFromInput,
+          formulaVars:     hasFormula && fv ? fv : undefined,
           sortOrder,
         });
         onSaved(added);
@@ -297,24 +222,18 @@ function AttributeModal({ mode, productGroupId, existingAttrs, onSaved, onClose 
 
         {/* Attribute definition */}
         {isEdit ? (
-          /* Readonly header when editing */
           <div style={{ backgroundColor: "var(--color-bg-input)", borderColor: "var(--color-border)" }}
             className="border rounded-lg px-3 py-2 flex items-center gap-2">
             <Tag size={13} style={{ color: "var(--color-text-muted)" }} />
-            <span style={{ color: "var(--color-text-primary)" }} className="text-sm font-medium">
-              {ga!.attribute.name}
-            </span>
-            {ga!.attribute.unit && (
-              <span style={{ color: "var(--color-text-muted)" }} className="text-xs">({ga!.attribute.unit})</span>
-            )}
+            <span style={{ color: "var(--color-text-primary)" }} className="text-sm font-medium">{ga!.attribute.name}</span>
+            {ga!.attribute.unit && <span style={{ color: "var(--color-text-muted)" }} className="text-xs">({ga!.attribute.unit})</span>}
           </div>
         ) : (
-          /* Define the attribute inline */
           <div className="space-y-3">
             <div>
               <label style={{ color: "var(--color-text-muted)" }} className="block text-xs mb-1">Name *</label>
               <input type="text" value={name} onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. Density of Rod" style={inputStyle} className={inputCls} autoFocus />
+                placeholder="e.g. Density" style={inputStyle} className={inputCls} autoFocus />
             </div>
             <div className="grid grid-cols-2 gap-3">
               <div>
@@ -334,12 +253,11 @@ function AttributeModal({ mode, productGroupId, existingAttrs, onSaved, onClose 
           </div>
         )}
 
-        {/* Formula alias (shared between add + edit) */}
+        {/* Formula alias + sort order */}
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label style={{ color: "var(--color-text-muted)" }} className="block text-xs mb-1">
-              Formula Alias
-              <span className="ml-1 opacity-60">(short var name)</span>
+              Formula Alias <span className="opacity-60">(short var name)</span>
             </label>
             <input type="text" value={formulaAlias} onChange={(e) => setFormulaAlias(e.target.value)}
               placeholder={isEdit ? effectiveAlias(ga!) : (name ? name.toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '') : "e.g. density")}
@@ -352,57 +270,153 @@ function AttributeModal({ mode, productGroupId, existingAttrs, onSaved, onClose 
           </div>
         </div>
 
-          {/* Attribute kind — mutually exclusive */}
-          <div>
-            <label style={{ color: "var(--color-text-muted)" }} className="block text-xs mb-2">
-              Attribute Kind
-            </label>
-            <div className="space-y-2">
-              {([
-                {
-                  value: "simple" as const,
-                  label: "Simple",
-                  desc:  "A value you enter per product — material property (density, cross-section area, etc.)",
-                },
-                {
-                  value: "qty_basis" as const,
-                  label: "Quantity Basis",
-                  desc:  "The ONE unit used to stock, procure, or consume products in this group (e.g. Weight in kg)",
-                },
-                {
-                  value: "calculated" as const,
-                  label: "Calculated",
-                  desc:  "Derived automatically from a formula using other attributes (e.g. Length = Weight ÷ Density ÷ Area)",
-                },
-              ] as const).map(({ value, label, desc }) => (
-                <label key={value}
-                  onClick={() => setKind(value)}
-                  style={{
-                    borderColor:     kind === value ? "var(--color-btn-bg)" : "var(--color-border)",
-                    backgroundColor: kind === value ? "color-mix(in srgb, var(--color-btn-bg) 8%, transparent)" : "var(--color-bg-page)",
-                    cursor: "pointer",
-                  }}
-                  className="flex items-start gap-3 border rounded-lg px-3 py-2.5 transition-colors">
-                  <input type="radio" name="attr-kind" value={value} checked={kind === value}
-                    onChange={() => setKind(value)}
-                    className="mt-0.5 cursor-pointer shrink-0" />
-                  <div>
-                    <span style={{ color: "var(--color-text-primary)" }} className="text-sm font-medium">{label}</span>
-                    <p style={{ color: "var(--color-text-muted)" }} className="text-xs mt-0.5">{desc}</p>
-                  </div>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          {isCalculated && (
-            <div>
-              <label style={{ color: "var(--color-text-muted)" }} className="block text-xs mb-1.5">
-                Formula
+        {/* Attribute kind */}
+        <div>
+          <label style={{ color: "var(--color-text-muted)" }} className="block text-xs mb-2">Attribute Kind</label>
+          <div className="space-y-2">
+            {([
+              { value: "simple"     as const, label: "Simple",              desc: "A fixed value entered per product — e.g. cross-section area." },
+              { value: "qty_basis"  as const, label: "Quantity Basis",      desc: "The ONE unit used to stock, procure or consume products in this group." },
+              { value: "calculated" as const, label: "Calculated",          desc: "Formula using sibling attributes of this group only." },
+              { value: "from_input" as const, label: "From Input Material", desc: "Formula that can reference attributes from input material groups (e.g. density from Copper Rod)." },
+            ] as const).map(({ value, label, desc }) => (
+              <label key={value} onClick={() => setKind(value)}
+                style={{
+                  borderColor:     kind === value ? "var(--color-btn-bg)" : "var(--color-border)",
+                  backgroundColor: kind === value ? "color-mix(in srgb, var(--color-btn-bg) 8%, transparent)" : "var(--color-bg-page)",
+                  cursor: "pointer",
+                }}
+                className="flex items-start gap-3 border rounded-lg px-3 py-2.5 transition-colors">
+                <input type="radio" name="attr-kind" value={value} checked={kind === value}
+                  onChange={() => setKind(value)} className="mt-0.5 cursor-pointer shrink-0" />
+                <div>
+                  <span style={{ color: "var(--color-text-primary)" }} className="text-sm font-medium">{label}</span>
+                  <p style={{ color: "var(--color-text-muted)" }} className="text-xs mt-0.5">{desc}</p>
+                </div>
               </label>
-              <FormulaBuilder value={formula} onChange={setFormula} siblings={siblings} />
-            </div>
-          )}
+            ))}
+          </div>
+        </div>
+
+        {/* Shared formula builder — Calculated (siblings only) or From Input (siblings + input groups) */}
+        {(isCalculated || isFromInput) && (
+          <div className="space-y-2">
+            <label style={{ color: "var(--color-text-muted)" }} className="block text-xs">
+              {isFromInput
+                ? <>Formula <span className="opacity-60">— can reference this group's attrs AND input material attrs</span></>
+                : "Formula"}
+            </label>
+
+            {isFromInput && bomInputs.length === 0 ? (
+              <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>
+                Add at least one Input Material (BOM) to this group first.
+              </p>
+            ) : isFromInput && loadingInputAttrs ? (
+              <p className="text-xs" style={{ color: "var(--color-text-muted)" }}>Loading attributes…</p>
+            ) : (
+              <>
+                {/* Sibling chips — indigo */}
+                {siblingAttrs.length > 0 && (
+                  <div className="rounded-lg p-2.5" style={{ backgroundColor: "color-mix(in srgb, #6366f1 6%, transparent)", border: "1px solid color-mix(in srgb, #6366f1 25%, transparent)" }}>
+                    <p className="text-[11px] mb-1.5 font-semibold" style={{ color: "#6366f1" }}>
+                      This group <span className="font-normal opacity-70">(siblings)</span>
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {siblingAttrs.map((s) => (
+                        <button key={s.id}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => clickSiblingChip(s)}
+                          className="px-2 py-0.5 rounded border text-xs font-mono hover:opacity-70 transition-opacity select-none"
+                          style={{ backgroundColor: "color-mix(in srgb, #6366f1 15%, transparent)", borderColor: "#6366f1", color: "#6366f1" }}>
+                          {effectiveAlias(s)}
+                          {s.attribute.unit && <span className="ml-1 font-sans opacity-70">({s.attribute.unit})</span>}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Input group chips — emerald, only for From Input kind */}
+                {isFromInput && Object.entries(inputGroupAttrMap).map(([groupId, { groupName, attrs }]) => (
+                  <div key={groupId} className="rounded-lg p-2.5" style={{ backgroundColor: "color-mix(in srgb, #10b981 6%, transparent)", border: "1px solid color-mix(in srgb, #10b981 25%, transparent)" }}>
+                    <p className="text-[11px] mb-1.5 font-semibold" style={{ color: "#10b981" }}>
+                      {groupName} <span className="font-normal opacity-70">(input)</span>
+                    </p>
+                    {attrs.length === 0 ? (
+                      <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>No attributes.</p>
+                    ) : (
+                      <div className="flex flex-wrap gap-1.5">
+                        {attrs.map((a) => (
+                          <button key={a.id}
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => clickInputAttrChip(a, groupId, groupName)}
+                            className="px-2 py-0.5 rounded border text-xs font-mono hover:opacity-70 transition-opacity select-none"
+                            style={{ backgroundColor: "color-mix(in srgb, #10b981 15%, transparent)", borderColor: "#10b981", color: "#10b981" }}>
+                            {effectiveAlias(a)}
+                            {a.attribute.unit && <span className="ml-1 font-sans opacity-70">({a.attribute.unit})</span>}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+
+                {/* Operators */}
+                <div className="flex flex-wrap gap-1">
+                  {FORMULA_OPS.map((op) => (
+                    <button key={op} onMouseDown={(e) => e.preventDefault()} onClick={() => insertAtFormulaCursor(FORMULA_OP_MAP[op])}
+                      style={{ borderColor: "var(--color-border)", color: "var(--color-text-secondary)", backgroundColor: "var(--color-bg-input)" }}
+                      className="w-8 h-7 flex items-center justify-center border rounded text-sm font-mono hover:opacity-70 transition-opacity">
+                      {op}
+                    </button>
+                  ))}
+                  <button onMouseDown={(e) => e.preventDefault()} onClick={() => insertAtFormulaCursor(" ")}
+                    style={{ borderColor: "var(--color-border)", color: "var(--color-text-muted)", backgroundColor: "var(--color-bg-input)" }}
+                    className="px-2 h-7 border rounded text-[11px] hover:opacity-70 transition-opacity">
+                    space
+                  </button>
+                </div>
+
+                {/* Formula textarea */}
+                <textarea
+                  ref={formulaTextareaRef}
+                  value={formula}
+                  onChange={(e) => { setFormula(e.target.value); saveFormulaCursor(); }}
+                  onSelect={saveFormulaCursor} onKeyUp={saveFormulaCursor} onClick={saveFormulaCursor} onBlur={saveFormulaCursor}
+                  placeholder="Click chips above to build the formula"
+                  rows={2}
+                  style={{ backgroundColor: "var(--color-bg-input)", borderColor: "var(--color-border-input)", color: "var(--color-text-primary)" }}
+                  className="w-full border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none resize-none"
+                />
+
+                {/* Preview */}
+                {formula.trim() && (
+                  <div className="rounded-lg px-3 py-2 space-y-1.5"
+                    style={{ backgroundColor: "var(--color-bg-nav-active)", border: "1px solid var(--color-border)" }}>
+                    <p className="text-[10px] font-medium uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>Preview</p>
+                    <FormulaDisplay formula={formula} formulaVars={attrFVars as unknown as FormulaVars} outputGroupId={productGroupId} />
+                    {Object.keys(attrFVars).length > 0 && (
+                      <div className="mt-1 space-y-0.5">
+                        {Object.entries(attrFVars).map(([token, fv]) => {
+                          const isOwn = fv.groupId === productGroupId;
+                          return (
+                            <div key={token} className="flex items-center gap-1.5 text-[11px]">
+                              <span className="font-mono px-1 rounded" style={{
+                                backgroundColor: isOwn ? "color-mix(in srgb, #6366f1 14%, transparent)" : "color-mix(in srgb, #10b981 14%, transparent)",
+                                color: isOwn ? "#6366f1" : "#10b981",
+                              }}>{fv.alias}</span>
+                              <span style={{ color: "var(--color-text-muted)" }}>← {fv.groupName} · {fv.attrName}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
 
         <div className="flex gap-2 pt-1">
           <button onClick={onClose}
@@ -423,14 +437,27 @@ function AttributeModal({ mode, productGroupId, existingAttrs, onSaved, onClose 
 
 // ─── formula display ─────────────────────────────────────────────────────────
 
-function tokenizeFormula(formula: string): Array<{ type: "id" | "other"; text: string }> {
-  const parts: Array<{ type: "id" | "other"; text: string }> = [];
-  const re = /([a-zA-Z_]\w*)|([^a-zA-Z_]+)/g;
+// Convert a pgaId UUID to a safe formula token: pga_ + uuid with hyphens → underscores
+function pgaToken(pgaId: string): string {
+  return `pga_${pgaId.replace(/-/g, "_")}`;
+}
+
+// Match pga_ tokens (pga_ + 32 hex chars + 4 underscores = 36 chars total)
+const PGA_TOKEN_RE = /\bpga_[0-9a-f]{8}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{12}\b/g;
+
+function tokenizeFormula(
+  formula: string,
+): Array<{ type: "pga"; token: string } | { type: "other"; text: string }> {
+  const parts: Array<{ type: "pga"; token: string } | { type: "other"; text: string }> = [];
+  let last = 0;
+  PGA_TOKEN_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(formula)) !== null) {
-    if (m[1]) parts.push({ type: "id", text: m[1] });
-    else parts.push({ type: "other", text: m[2] });
+  while ((m = PGA_TOKEN_RE.exec(formula)) !== null) {
+    if (m.index > last) parts.push({ type: "other", text: formula.slice(last, m.index) });
+    parts.push({ type: "pga", token: m[0] });
+    last = m.index + m[0].length;
   }
+  if (last < formula.length) parts.push({ type: "other", text: formula.slice(last) });
   return parts;
 }
 
@@ -439,30 +466,33 @@ function FormulaDisplay({
   formulaVars,
   outputGroupId,
 }: {
-  formula:      string;
-  formulaVars:  FormulaVars | null;
+  formula:       string;
+  formulaVars:   FormulaVars | null;
   outputGroupId: string;
 }) {
   const tokens = tokenizeFormula(formula);
   return (
     <span className="text-xs font-mono break-all">
       {tokens.map((t, i) => {
-        if (t.type === "id" && formulaVars?.[t.text]) {
-          const fv        = formulaVars[t.text];
-          const isOutput  = fv.groupId === outputGroupId;
+        if (t.type === "pga") {
+          const fv       = formulaVars?.[t.token];
+          const label    = fv ? fv.alias : t.token;
+          const isOutput = fv ? fv.groupId === outputGroupId : false;
           return (
             <span
               key={i}
-              title={`${fv.attrName} · from ${fv.groupName}`}
-              className="rounded px-0.5"
+              title={fv ? `${fv.attrName} · from ${fv.groupName}` : t.token}
+              className="rounded px-0.5 mx-px"
               style={{
-                backgroundColor: isOutput
-                  ? "color-mix(in srgb, #6366f1 14%, transparent)"
-                  : "color-mix(in srgb, #10b981 14%, transparent)",
-                color: isOutput ? "#6366f1" : "#10b981",
+                backgroundColor: fv
+                  ? isOutput
+                    ? "color-mix(in srgb, #6366f1 14%, transparent)"
+                    : "color-mix(in srgb, #10b981 14%, transparent)"
+                  : "color-mix(in srgb, #ef4444 14%, transparent)",
+                color: fv ? (isOutput ? "#6366f1" : "#10b981") : "#ef4444",
               }}
             >
-              {t.text}
+              {label}
             </span>
           );
         }
@@ -539,21 +569,33 @@ function BomInputModal({ mode, productGroupId, allGroups, onSaved, onClose }: Bo
   }
 
   function clickOutputChip(ga: GroupAttribute) {
-    const alias = effectiveAlias(ga);
-    insertAtCursor(alias);
+    const token = pgaToken(ga.id);
+    insertAtCursor(token);
     setFormulaVars((prev) => ({
       ...prev,
-      [alias]: { pgaId: ga.id, groupId: productGroupId, groupName: outputGroupName, attrName: ga.attribute.name },
+      [token]: {
+        pgaId:     ga.id,
+        groupId:   productGroupId,
+        groupName: outputGroupName,
+        attrName:  ga.attribute.name,
+        alias:     effectiveAlias(ga),
+      },
     }));
   }
 
   function clickInputChip(ga: GroupAttribute) {
     if (!chosenGroup) return;
-    const alias = effectiveAlias(ga);
-    insertAtCursor(alias);
+    const token = pgaToken(ga.id);
+    insertAtCursor(token);
     setFormulaVars((prev) => ({
       ...prev,
-      [alias]: { pgaId: ga.id, groupId: chosenGroup.id, groupName: chosenGroup.name, attrName: ga.attribute.name },
+      [token]: {
+        pgaId:     ga.id,
+        groupId:   chosenGroup.id,
+        groupName: chosenGroup.name,
+        attrName:  ga.attribute.name,
+        alias:     effectiveAlias(ga),
+      },
     }));
   }
 
@@ -778,30 +820,42 @@ function BomInputModal({ mode, productGroupId, allGroups, onSaved, onClose }: Bo
             value={qtyFormula}
             onChange={(e) => { setQtyFormula(e.target.value); saveCursor(); }}
             onSelect={saveCursor} onKeyUp={saveCursor} onClick={saveCursor} onBlur={saveCursor}
-            placeholder="e.g. density * cross_section * length / 1000000"
+            placeholder="Click chips above to build the formula"
             rows={3}
             style={{ backgroundColor: "var(--color-bg-input)", borderColor: "var(--color-border-input)", color: "var(--color-text-primary)" }}
             className="w-full border rounded-lg px-3 py-2 text-sm font-mono focus:outline-none resize-none"
           />
 
-          {/* Tracked vars summary */}
-          {Object.keys(formulaVars).length > 0 && (
-            <div className="mt-2 rounded-lg px-3 py-2 text-[11px] space-y-1"
+          {/* Human-readable preview + variable source table */}
+          {qtyFormula.trim() && (
+            <div className="mt-2 rounded-lg px-3 py-2 space-y-2"
               style={{ backgroundColor: "var(--color-bg-nav-active)", border: "1px solid var(--color-border)" }}>
-              <p className="font-medium" style={{ color: "var(--color-text-muted)" }}>Tracked variables:</p>
-              {Object.entries(formulaVars).map(([alias, fv]) => {
-                const isOutput = fv.groupId === productGroupId;
-                return (
-                  <div key={alias} className="flex items-center gap-1.5">
-                    <code className="font-mono px-1 rounded" style={{
-                      backgroundColor: isOutput ? "color-mix(in srgb, #6366f1 14%, transparent)" : "color-mix(in srgb, #10b981 14%, transparent)",
-                      color: isOutput ? "#6366f1" : "#10b981",
-                    }}>{alias}</code>
-                    <span style={{ color: "var(--color-text-muted)" }}>→</span>
-                    <span style={{ color: "var(--color-text-muted)" }}>{fv.groupName} · {fv.attrName}</span>
+              <div>
+                <span className="text-[10px] font-medium uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>Preview</span>
+                <div className="mt-0.5">
+                  <FormulaDisplay formula={qtyFormula} formulaVars={formulaVars} outputGroupId={productGroupId} />
+                </div>
+              </div>
+              {Object.keys(formulaVars).length > 0 && (
+                <div>
+                  <span className="text-[10px] font-medium uppercase tracking-wider" style={{ color: "var(--color-text-muted)" }}>Variable sources</span>
+                  <div className="mt-1 space-y-0.5">
+                    {Object.entries(formulaVars).map(([token, fv]) => {
+                      const isOutput = fv.groupId === productGroupId;
+                      return (
+                        <div key={token} className="flex items-center gap-1.5 text-[11px]">
+                          <span className="font-mono px-1 rounded" style={{
+                            backgroundColor: isOutput ? "color-mix(in srgb, #6366f1 14%, transparent)" : "color-mix(in srgb, #10b981 14%, transparent)",
+                            color: isOutput ? "#6366f1" : "#10b981",
+                          }}>{fv.alias}</span>
+                          <span style={{ color: "var(--color-text-muted)" }}>←</span>
+                          <span style={{ color: "var(--color-text-muted)" }}>{fv.groupName} · {fv.attrName}</span>
+                        </div>
+                      );
+                    })}
                   </div>
-                );
-              })}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -1072,7 +1126,7 @@ export default function ProductGroupDetailPage() {
                   {/* Order */}
                   <span style={{ color: "var(--color-text-muted)" }} className="text-xs pt-0.5">{idx + 1}</span>
 
-                  {/* Attribute name + formula */}
+                  {/* Attribute name + formula preview */}
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5">
                       <span style={{ color: "var(--color-text-primary)" }} className="text-sm font-medium">
@@ -1084,26 +1138,38 @@ export default function ProductGroupDetailPage() {
                         </span>
                       )}
                     </div>
-                    {ga.isCalculated && ga.formula && (
-                      <p style={{ color: "var(--color-text-muted)" }} className="text-xs font-mono mt-0.5 truncate">
-                        = {ga.formula}
-                      </p>
+                    {(ga.isCalculated || ga.isFromInput) && ga.formula && (
+                      <div className="mt-1 flex items-start gap-1">
+                        <span style={{ color: "var(--color-text-muted)" }} className="text-xs mt-0.5 shrink-0">=</span>
+                        <FormulaDisplay
+                          formula={ga.formula}
+                          formulaVars={ga.formulaVars as unknown as FormulaVars}
+                          outputGroupId={ga.productGroupId}
+                        />
+                      </div>
                     )}
                   </div>
 
                   {/* Alias */}
-                  <span style={{ color: "var(--color-text-secondary)" }} className="text-xs font-mono pt-0.5">
+                  <span style={{ color: "var(--color-text-secondary)" }} className="text-xs font-mono pt-0.5 break-all">
                     {alias}
                   </span>
 
                   {/* Kind badge */}
                   <div className="pt-0.5">
-                    {ga.isCalculated ? (
-                      <span className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">
+                    {ga.isFromInput ? (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded"
+                        style={{ backgroundColor: "color-mix(in srgb, #10b981 12%, transparent)", color: "#10b981" }}>
+                        <GitMerge size={10} /> From Input
+                      </span>
+                    ) : ga.isCalculated ? (
+                      <span className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded"
+                        style={{ backgroundColor: "color-mix(in srgb, #a855f7 12%, transparent)", color: "#a855f7" }}>
                         <FlaskConical size={10} /> Calculated
                       </span>
                     ) : ga.isQuantityBasis ? (
-                      <span className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded bg-amber-50 text-amber-700">
+                      <span className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded"
+                        style={{ backgroundColor: "color-mix(in srgb, #f59e0b 12%, transparent)", color: "#f59e0b" }}>
                         <Star size={10} fill="currentColor" /> Qty Basis
                       </span>
                     ) : (
@@ -1262,6 +1328,7 @@ export default function ProductGroupDetailPage() {
           mode={modal}
           productGroupId={id}
           existingAttrs={attrs}
+          bomInputs={inputs}
           onSaved={handleAttrSaved}
           onClose={() => setModal(null)}
         />

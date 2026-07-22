@@ -9,17 +9,28 @@ export interface Attribute {
   updatedAt: string;
 }
 
+export interface AttrFormulaVar {
+  pgaId:     string;
+  groupId:   string;
+  groupName: string;
+  attrName:  string;
+  alias:     string;
+}
+export type AttrFormulaVars = Record<string, AttrFormulaVar>;
+
 // A single attribute as it appears within a product group
 export interface GroupAttribute {
-  id:             string;
-  productGroupId: string;
-  attributeId:    string;
-  formulaAlias:   string | null;   // null → derived from attribute.name at runtime
-  isCalculated:   boolean;
-  formula:        string | null;   // formula referencing sibling formulaAliases
-  isQuantityBasis: boolean;        // the ONE "measured in / stock unit" attribute
-  sortOrder:      number;
-  createdAt:      string;
+  id:              string;
+  productGroupId:  string;
+  attributeId:     string;
+  formulaAlias:    string | null;
+  isCalculated:    boolean;
+  formula:         string | null;
+  isQuantityBasis: boolean;
+  isFromInput:     boolean;
+  formulaVars:     AttrFormulaVars | null;
+  sortOrder:       number;
+  createdAt:       string;
   attribute: {
     id:       string;
     name:     string;
@@ -42,6 +53,8 @@ export interface AddGroupAttributePayload {
   isCalculated?:   boolean;
   formula?:        string;
   isQuantityBasis?: boolean;
+  isFromInput?:    boolean;
+  formulaVars?:    AttrFormulaVars;
   sortOrder?:      number;
 }
 
@@ -50,6 +63,8 @@ export interface UpdateGroupAttributePayload {
   isCalculated?:   boolean;
   formula?:        string | null;
   isQuantityBasis?: boolean;
+  isFromInput?:    boolean;
+  formulaVars?:    AttrFormulaVars | null;
   sortOrder?:      number;
 }
 

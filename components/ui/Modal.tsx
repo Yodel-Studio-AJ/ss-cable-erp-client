@@ -30,11 +30,12 @@ export default function Modal({ title, onClose, children, width = "max-w-lg" }: 
           backgroundColor: "var(--color-bg-popup)",
           borderColor: "var(--color-border)",
           color: "var(--color-text-primary)",
+          maxHeight: "90vh",
         }}
-        className={`relative z-10 w-full ${width} rounded-xl border shadow-2xl`}>
+        className={`relative z-10 w-full ${width} rounded-xl border shadow-2xl flex flex-col`}>
         <div
           style={{ borderBottomColor: "var(--color-border)" }}
-          className="flex items-center justify-between px-5 py-4 border-b">
+          className="flex items-center justify-between px-5 py-4 border-b shrink-0">
           <h2 className="font-semibold text-base">{title}</h2>
           <button
             onClick={onClose}
@@ -43,7 +44,7 @@ export default function Modal({ title, onClose, children, width = "max-w-lg" }: 
             <X size={18} />
           </button>
         </div>
-        <div className="p-5">{children}</div>
+        <div className="p-5 overflow-y-auto scrollbar-thin">{children}</div>
       </div>
     </div>
   );

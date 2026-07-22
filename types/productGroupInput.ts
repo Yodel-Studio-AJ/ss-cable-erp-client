@@ -5,6 +5,7 @@ export interface FormulaVar {
   groupId:   string;
   groupName: string;
   attrName:  string;
+  alias:     string;  // effective alias — used for display only, not for evaluation
 }
 
 export type FormulaVars = Record<string, FormulaVar>;
