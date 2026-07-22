@@ -6,30 +6,30 @@ export interface ProductWithGroup extends Product {
 }
 
 export async function listAllProducts(): Promise<ProductWithGroup[]> {
-  const { data } = await api.get<ProductWithGroup[]>(`/products`);
+  const { data } = await api.get<ProductWithGroup[]>(`/api/products`);
   return data;
 }
 
 export async function listGroupProducts(groupId: string): Promise<Product[]> {
-  const { data } = await api.get<Product[]>(`/product-groups/${groupId}/products`);
+  const { data } = await api.get<Product[]>(`/api/product-groups/${groupId}/products`);
   return data;
 }
 
 export async function getGroupProduct(groupId: string, productId: string): Promise<Product> {
-  const { data } = await api.get<Product>(`/product-groups/${groupId}/products/${productId}`);
+  const { data } = await api.get<Product>(`/api/product-groups/${groupId}/products/${productId}`);
   return data;
 }
 
 export async function createGroupProduct(groupId: string, payload: CreateProductPayload): Promise<Product> {
-  const { data } = await api.post<Product>(`/product-groups/${groupId}/products`, payload);
+  const { data } = await api.post<Product>(`/api/product-groups/${groupId}/products`, payload);
   return data;
 }
 
 export async function updateGroupProduct(groupId: string, productId: string, payload: UpdateProductPayload): Promise<Product> {
-  const { data } = await api.patch<Product>(`/product-groups/${groupId}/products/${productId}`, payload);
+  const { data } = await api.patch<Product>(`/api/product-groups/${groupId}/products/${productId}`, payload);
   return data;
 }
 
 export async function deleteGroupProduct(groupId: string, productId: string): Promise<void> {
-  await api.delete(`/product-groups/${groupId}/products/${productId}`);
+  await api.delete(`/api/product-groups/${groupId}/products/${productId}`);
 }
