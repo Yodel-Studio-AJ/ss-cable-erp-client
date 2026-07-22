@@ -24,6 +24,7 @@ export const navItems: NavItem[] = [
     icon: Package,
     children: [
       { name: "Product Groups", href: "/inventory/product-groups" },
+      { name: "Product Variants", href: "/inventory/products" },
     ],
   },
   {

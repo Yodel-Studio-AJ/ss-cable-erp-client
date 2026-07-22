@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft, Edit, Tag, Calendar, Plus, Pencil, Trash2,
   FlaskConical, Star, ChevronUp, ChevronDown, GitMerge,
+  Package, Hash, CheckCircle, XCircle, Calculator,
 } from "lucide-react";
 import Modal from "@/components/ui/Modal";
 import { getProductGroup, getProductGroups } from "@/api/productGroups";
@@ -16,9 +17,13 @@ import {
 import {
   getGroupInputs, addGroupInput, updateGroupInput, removeGroupInput,
 } from "@/api/productGroupInputs";
+import {
+  listGroupProducts, createGroupProduct, updateGroupProduct, deleteGroupProduct,
+} from "@/api/products";
 import type { ProductGroup, ProductGroupType, MaterialType } from "@/types/productGroup";
 import type { GroupAttribute, AttrFormulaVar, AttrFormulaVars } from "@/types/attribute";
 import type { GroupInput, FormulaVar, FormulaVars } from "@/types/productGroupInput";
+import type { Product, CreateProductPayload } from "@/types/product";
 import { effectiveAlias } from "@/types/attribute";
 import { PRODUCT_GROUP_TYPE_LABELS, MATERIAL_TYPE_LABELS } from "@/types/productGroup";
 import type { AxiosError } from "axios";
@@ -890,6 +895,327 @@ function BomInputModal({ mode, productGroupId, allGroups, onSaved, onClose }: Bo
   );
 }
 
+// ─── formula evaluator (for auto-computing calculated attr values) ────────────
+
+const PGA_RE = /\bpga_[0-9a-f]{8}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{12}\b/g;
+
+function evalFormula(
+  formula: string,
+  formulaVars: AttrFormulaVars | null,
+  valuesByPgaId: Record<string, number>,
+): number | null {
+  if (!formulaVars) return null;
+  let expr = formula;
+  for (const [token, fv] of Object.entries(formulaVars)) {
+    const val = valuesByPgaId[fv.pgaId];
+    if (val === undefined || val === null || isNaN(val)) return null;
+    expr = expr.replace(new RegExp(token, 'g'), String(val));
+  }
+  // Ensure no unresolved pga tokens remain
+  if (PGA_RE.test(expr)) return null;
+  try {
+    // eslint-disable-next-line no-new-func
+    const result = new Function(`"use strict"; return (${expr})`)();
+    return typeof result === 'number' && isFinite(result) ? result : null;
+  } catch {
+    return null;
+  }
+}
+
+// ─── product variant modal ────────────────────────────────────────────────────
+
+interface ProductVariantModalProps {
+  mode: { type: "add" } | { type: "edit"; product: Product };
+  productGroupId: string;
+  groupName: string;
+  groupAttrs: GroupAttribute[];
+  onSaved: (p: Product) => void;
+  onClose: () => void;
+}
+
+function buildSkuSuggestion(groupName: string, qtyValue: number | string | null | undefined, unit: string | null | undefined): string {
+  const abbrev = groupName.split(/\s+/).filter(Boolean).map((w) => w[0].toUpperCase()).join("");
+  const val = (qtyValue == null || qtyValue === "") ? "" : String(qtyValue).replace(".", "P");
+  const unitClean = unit
+    ? unit.toUpperCase().replace(/²/g, "2").replace(/³/g, "3").replace(/[^A-Z0-9]/g, "")
+    : "";
+  if (!val) return abbrev;
+  return `${abbrev}-${val}${unitClean}`;
+}
+
+function ProductVariantModal({ mode, productGroupId, groupName, groupAttrs, onSaved, onClose }: ProductVariantModalProps) {
+  const isEdit = mode.type === "edit";
+  const existing = isEdit ? mode.product : null;
+
+  // Build initial values from existing product
+  const initValues = () => {
+    const m: Record<string, number | string | null> = {};
+    if (existing) {
+      for (const av of existing.attributeValues) {
+        m[av.productGroupAttributeId] = av.numericValue ?? av.textValue ?? null;
+      }
+    }
+    return m;
+  };
+
+  const [name, setName]           = useState(existing?.name ?? "");
+  const [sku, setSku]             = useState(existing?.sku ?? "");
+  const [description, setDesc]    = useState(existing?.description ?? "");
+  const [values, setValues]       = useState<Record<string, number | string | null>>(initValues);
+  const [saving, setSaving]       = useState(false);
+  const [error, setError]         = useState<string | null>(null);
+
+  // Compute values for all calculated attrs in real-time
+  const computedValues = useMemo(() => {
+    const result: Record<string, number | null> = {};
+    // Build pgaId → value map from user-entered simple/qty_basis values
+    const byPgaId: Record<string, number> = {};
+    for (const ga of groupAttrs) {
+      if (!ga.isCalculated && !ga.isFromInput) {
+        const v = values[ga.id];
+        if (typeof v === 'number' && !isNaN(v)) byPgaId[ga.id] = v;
+      }
+    }
+    for (const ga of groupAttrs) {
+      if (ga.isCalculated && ga.formula) {
+        result[ga.id] = evalFormula(ga.formula, ga.formulaVars, byPgaId);
+      }
+    }
+    return result;
+  }, [groupAttrs, values]);
+
+  function autoName() {
+    const qb = groupAttrs.find((a) => a.isQuantityBasis);
+    if (!qb) return;
+    const val = values[qb.id];
+    if (val === null || val === undefined || val === "") return;
+    const unit = qb.attribute.unit ?? "";
+    setName(`${val}${unit ? " " + unit : ""} ${/* we don't have group name here */ "Variant"}`);
+  }
+
+  async function handleSave() {
+    if (!name.trim()) { setError("Name is required."); return; }
+    setSaving(true); setError(null);
+
+    const attributeValues: CreateProductPayload["attributeValues"] = [];
+    for (const ga of groupAttrs) {
+      if (ga.isFromInput) continue; // skip — computed at production time
+      if (ga.isCalculated) {
+        const cv = computedValues[ga.id];
+        if (cv !== null && cv !== undefined) {
+          attributeValues.push({ productGroupAttributeId: ga.id, numericValue: cv });
+        }
+        continue;
+      }
+      const raw = values[ga.id];
+      if (raw === null || raw === undefined || raw === "") continue;
+      if (ga.attribute.dataType === "number") {
+        const n = Number(raw);
+        if (!isNaN(n)) attributeValues.push({ productGroupAttributeId: ga.id, numericValue: n });
+      } else {
+        attributeValues.push({ productGroupAttributeId: ga.id, textValue: String(raw) });
+      }
+    }
+
+    try {
+      let saved: Product;
+      if (isEdit) {
+        saved = await updateGroupProduct(productGroupId, existing!.id, {
+          name: name.trim(),
+          sku: sku.trim() || null,
+          description: description.trim() || null,
+          attributeValues,
+        });
+      } else {
+        saved = await createGroupProduct(productGroupId, {
+          name: name.trim(),
+          sku: sku.trim() || undefined,
+          description: description.trim() || undefined,
+          attributeValues,
+        });
+      }
+      onSaved(saved);
+      onClose();
+    } catch (err) {
+      const e = err as import("axios").AxiosError<{ message?: string }>;
+      setError(e.response?.data?.message ?? "Failed to save.");
+      setSaving(false);
+    }
+  }
+
+  const inputStyle = {
+    backgroundColor: "var(--color-bg-input)",
+    borderColor: "var(--color-border-input)",
+    color: "var(--color-text-primary)",
+  };
+
+  return (
+    <Modal title={isEdit ? "Edit Variant" : "Add Product Variant"} onClose={onClose} width="max-w-xl">
+      <div className="space-y-4">
+
+        {/* Name */}
+        <div className="space-y-1.5">
+          <label style={{ color: "var(--color-text-muted)" }} className="block text-xs">Variant Name</label>
+          <input
+            value={name} onChange={(e) => setName(e.target.value)}
+            placeholder="e.g. 6 mm² Drawn Copper Wire"
+            style={inputStyle}
+            className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none"
+          />
+        </div>
+
+        {/* SKU */}
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between">
+            <label style={{ color: "var(--color-text-muted)" }} className="text-xs">
+              SKU <span className="opacity-60">(optional)</span>
+            </label>
+            {(() => {
+              const qb = groupAttrs.find((a) => a.isQuantityBasis);
+              const suggested = buildSkuSuggestion(groupName, qb ? values[qb.id] : null, qb?.attribute.unit);
+              return suggested !== buildSkuSuggestion(groupName, null, null) ? (
+                <button
+                  type="button"
+                  onClick={() => setSku(suggested)}
+                  className="text-[11px] px-1.5 py-0.5 rounded hover:opacity-70 transition-opacity font-mono"
+                  style={{ backgroundColor: "color-mix(in srgb, #6366f1 12%, transparent)", color: "#6366f1" }}>
+                  ↺ {suggested}
+                </button>
+              ) : null;
+            })()}
+          </div>
+          <input
+            value={sku} onChange={(e) => setSku(e.target.value)}
+            placeholder={buildSkuSuggestion(groupName, null, null)}
+            style={inputStyle}
+            className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none font-mono"
+          />
+        </div>
+
+        {/* Attribute values */}
+        {groupAttrs.length > 0 && (
+          <div className="space-y-1">
+            <p style={{ color: "var(--color-text-muted)" }} className="text-xs font-medium">Attribute Values</p>
+            <div className="rounded-lg border divide-y" style={{ borderColor: "var(--color-border)" }}>
+              {groupAttrs.map((ga) => {
+                const alias = effectiveAlias(ga);
+                const isFromInput = ga.isFromInput;
+                const isCalc = ga.isCalculated;
+                const computed = isCalc ? computedValues[ga.id] : null;
+
+                return (
+                  <div key={ga.id} className="flex items-center gap-3 px-3 py-2.5">
+                    {/* Attribute name */}
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span style={{ color: "var(--color-text-primary)" }} className="text-xs font-medium truncate">
+                          {ga.attribute.name}
+                        </span>
+                        {ga.attribute.unit && (
+                          <span style={{ color: "var(--color-text-muted)" }} className="text-[11px]">
+                            ({ga.attribute.unit})
+                          </span>
+                        )}
+                      </div>
+                      <span style={{ color: "var(--color-text-muted)" }} className="text-[11px] font-mono">{alias}</span>
+                    </div>
+
+                    {/* Kind badge */}
+                    <div className="shrink-0">
+                      {ga.isQuantityBasis ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-medium"
+                          style={{ backgroundColor: "color-mix(in srgb, #f59e0b 12%, transparent)", color: "#f59e0b" }}>
+                          <Star size={9} fill="currentColor" /> Basis
+                        </span>
+                      ) : isCalc ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-medium"
+                          style={{ backgroundColor: "color-mix(in srgb, #a855f7 12%, transparent)", color: "#a855f7" }}>
+                          <Calculator size={9} /> Calc
+                        </span>
+                      ) : isFromInput ? (
+                        <span className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-medium"
+                          style={{ backgroundColor: "color-mix(in srgb, #10b981 12%, transparent)", color: "#10b981" }}>
+                          <GitMerge size={9} /> Input
+                        </span>
+                      ) : null}
+                    </div>
+
+                    {/* Input field */}
+                    <div className="w-32 shrink-0">
+                      {isFromInput ? (
+                        <span style={{ color: "var(--color-text-muted)" }} className="text-[11px] italic">
+                          At production time
+                        </span>
+                      ) : isCalc ? (
+                        <div className="text-right">
+                          {computed !== null ? (
+                            <span style={{ color: "var(--color-text-primary)" }} className="text-sm font-mono">
+                              {parseFloat(computed.toFixed(6))}
+                            </span>
+                          ) : (
+                            <span style={{ color: "var(--color-text-muted)" }} className="text-xs italic">
+                              needs inputs
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <input
+                          type={ga.attribute.dataType === "number" ? "number" : "text"}
+                          value={values[ga.id] ?? ""}
+                          onChange={(e) => {
+                            const v = ga.attribute.dataType === "number"
+                              ? (e.target.value === "" ? null : parseFloat(e.target.value))
+                              : e.target.value;
+                            setValues((prev) => ({ ...prev, [ga.id]: v }));
+                            // Auto-fill SKU when qty-basis value is entered and SKU is still empty
+                            if (ga.isQuantityBasis && !sku) {
+                              const suggested = buildSkuSuggestion(groupName, v, ga.attribute.unit);
+                              setSku(suggested);
+                            }
+                          }}
+                          placeholder="—"
+                          style={inputStyle}
+                          className="w-full border rounded px-2 py-1 text-sm text-right font-mono focus:outline-none"
+                        />
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Description */}
+        <div className="space-y-1.5">
+          <label style={{ color: "var(--color-text-muted)" }} className="block text-xs">Description <span className="opacity-60">(optional)</span></label>
+          <textarea
+            value={description} onChange={(e) => setDesc(e.target.value)}
+            rows={2}
+            style={inputStyle}
+            className="w-full border rounded-lg px-3 py-2 text-sm focus:outline-none resize-none"
+          />
+        </div>
+
+        {error && <p className="text-xs text-red-500">{error}</p>}
+
+        <div className="flex gap-2 pt-1">
+          <button onClick={onClose}
+            style={{ borderColor: "var(--color-border)", color: "var(--color-text-secondary)" }}
+            className="flex-1 border rounded-lg py-2 text-sm hover:opacity-70 transition-opacity">
+            Cancel
+          </button>
+          <button onClick={handleSave} disabled={saving}
+            style={{ backgroundColor: "var(--color-btn-bg)", color: "var(--color-btn-text)" }}
+            className="flex-1 rounded-lg py-2 text-sm font-medium hover:opacity-80 transition-opacity disabled:opacity-40">
+            {saving ? "Saving…" : isEdit ? "Update" : "Create Variant"}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 // ─── main page ────────────────────────────────────────────────────────────────
 
 export default function ProductGroupDetailPage() {
@@ -902,8 +1228,10 @@ export default function ProductGroupDetailPage() {
   const [allGroups, setAllGroups] = useState<ProductGroup[]>([]);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState<string | null>(null);
-  const [modal, setModal]       = useState<ModalMode | null>(null);
-  const [bomModal, setBomModal] = useState<BomMode | null>(null);
+  const [modal, setModal]           = useState<ModalMode | null>(null);
+  const [bomModal, setBomModal]     = useState<BomMode | null>(null);
+  const [products, setProducts]     = useState<Product[]>([]);
+  const [productModal, setProductModal] = useState<{ type: "add" } | { type: "edit"; product: Product } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -924,6 +1252,13 @@ export default function ProductGroupDetailPage() {
         if (!cancelled) setError("Failed to load product group.");
       } finally {
         if (!cancelled) setLoading(false);
+      }
+      // Load products separately — a failure here shouldn't break the whole page
+      try {
+        const prods = await listGroupProducts(id);
+        if (!cancelled) setProducts(prods);
+      } catch {
+        // products endpoint may not be available yet; page still functions
       }
     }
     load();
@@ -973,6 +1308,24 @@ export default function ProductGroupDetailPage() {
       setInputs((prev) => prev.filter((i) => i.id !== inputId));
     } catch {
       setError("Failed to remove BOM input.");
+    }
+  }
+
+  function handleProductSaved(p: Product) {
+    setProducts((prev) => {
+      const idx = prev.findIndex((e) => e.id === p.id);
+      if (idx >= 0) { const next = [...prev]; next[idx] = p; return next; }
+      return [...prev, p];
+    });
+  }
+
+  async function handleDeleteProduct(productId: string) {
+    if (!confirm("Delete this product variant?")) return;
+    try {
+      await deleteGroupProduct(id, productId);
+      setProducts((prev) => prev.filter((p) => p.id !== productId));
+    } catch {
+      setError("Failed to delete product.");
     }
   }
 
@@ -1323,6 +1676,84 @@ export default function ProductGroupDetailPage() {
         )}
       </div>
 
+      {/* Variants section */}
+      <div style={{ backgroundColor: "var(--color-bg-popup)", borderColor: "var(--color-border)" }}
+        className="border rounded-lg overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3"
+          style={{ borderBottom: "1px solid var(--color-border)" }}>
+          <div className="flex items-center gap-2">
+            <Package size={14} style={{ color: "var(--color-text-muted)" }} />
+            <p style={{ color: "var(--color-text-primary)" }} className="text-sm font-semibold">Product Variants</p>
+            <span style={{ color: "var(--color-text-muted)" }} className="text-xs">({products.length})</span>
+          </div>
+          <button
+            onClick={() => setProductModal({ type: "add" })}
+            style={{ backgroundColor: "var(--color-btn-bg)", color: "var(--color-btn-text)" }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium hover:opacity-80 transition-opacity">
+            <Plus size={12} /> Add Variant
+          </button>
+        </div>
+
+        {products.length === 0 ? (
+          <div style={{ color: "var(--color-text-muted)" }} className="text-sm text-center py-8">
+            No variants yet.{" "}
+            <button onClick={() => setProductModal({ type: "add" })} className="underline hover:opacity-70">
+              Create one.
+            </button>
+          </div>
+        ) : (
+          <>
+            <div className="grid grid-cols-[1fr_8rem_5rem_auto] items-center px-4 py-2 text-[11px] font-medium uppercase tracking-wider"
+              style={{ color: "var(--color-text-muted)", borderBottom: "1px solid var(--color-border)" }}>
+              <span>Name</span>
+              <span>SKU</span>
+              <span>Status</span>
+              <span />
+            </div>
+            {products.map((p, idx) => {
+              const qtyBasisAttr = attrs.find((a) => a.isQuantityBasis);
+              const qtyVal = qtyBasisAttr
+                ? p.attributeValues.find((v) => v.productGroupAttributeId === qtyBasisAttr.id)
+                : null;
+              return (
+                <div key={p.id}
+                  style={{ borderTop: idx > 0 ? "1px solid var(--color-border)" : undefined }}
+                  className="grid grid-cols-[1fr_8rem_5rem_auto] items-center px-4 py-3 gap-x-3">
+                  <div className="min-w-0">
+                    <p style={{ color: "var(--color-text-primary)" }} className="text-sm font-medium truncate">{p.name}</p>
+                    {qtyVal?.numericValue != null && qtyBasisAttr && (
+                      <p style={{ color: "var(--color-text-muted)" }} className="text-xs mt-0.5">
+                        {qtyBasisAttr.attribute.name}: <span className="font-mono">{qtyVal.numericValue}</span>
+                        {qtyBasisAttr.attribute.unit && <span className="ml-0.5">{qtyBasisAttr.attribute.unit}</span>}
+                      </p>
+                    )}
+                  </div>
+                  <span style={{ color: "var(--color-text-secondary)" }} className="text-xs font-mono">
+                    {p.sku ?? <span style={{ color: "var(--color-text-muted)" }}>—</span>}
+                  </span>
+                  <span className="flex items-center gap-1 text-xs">
+                    {p.isActive
+                      ? <><CheckCircle size={11} className="text-green-500" /><span className="text-green-600">Active</span></>
+                      : <><XCircle size={11} className="text-red-400" /><span className="text-red-500">Inactive</span></>}
+                  </span>
+                  <div className="flex items-center gap-0.5">
+                    <button onClick={() => setProductModal({ type: "edit", product: p })}
+                      style={{ color: "var(--color-text-muted)" }}
+                      className="p-1.5 rounded hover:opacity-70 transition-opacity">
+                      <Pencil size={12} />
+                    </button>
+                    <button onClick={() => handleDeleteProduct(p.id)}
+                      className="p-1.5 rounded text-red-400 hover:opacity-70 transition-opacity">
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </>
+        )}
+      </div>
+
       {modal && (
         <AttributeModal
           mode={modal}
@@ -1341,6 +1772,17 @@ export default function ProductGroupDetailPage() {
           allGroups={allGroups}
           onSaved={handleBomSaved}
           onClose={() => setBomModal(null)}
+        />
+      )}
+
+      {productModal && (
+        <ProductVariantModal
+          mode={productModal}
+          productGroupId={id}
+          groupName={group.name}
+          groupAttrs={attrs}
+          onSaved={handleProductSaved}
+          onClose={() => setProductModal(null)}
         />
       )}
     </div>
