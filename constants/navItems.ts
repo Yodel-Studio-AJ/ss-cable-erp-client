@@ -1,4 +1,4 @@
-import { LayoutDashboard, Settings, Package, Building2, Users2 } from "lucide-react";
+import { LayoutDashboard, Settings, Package, Building2, Users2, ShoppingCart, Factory } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export interface NavChild {
@@ -25,6 +25,20 @@ export const navItems: NavItem[] = [
     children: [
       { name: "Product Groups", href: "/inventory/product-groups" },
       { name: "Product Variants", href: "/inventory/products" },
+    ],
+  },
+  {
+    name: "Procurement",
+    icon: ShoppingCart,
+    children: [
+      { name: "Purchase Orders", href: "/procurement/purchase-orders" },
+    ],
+  },
+  {
+    name: "Manufacturing",
+    icon: Factory,
+    children: [
+      { name: "BOM Calculator", href: "/manufacturing/bom" },
     ],
   },
   {
