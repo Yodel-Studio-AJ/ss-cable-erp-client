@@ -19,6 +19,7 @@ import {
 } from "@/api/productGroupInputs";
 import {
   listGroupProducts, createGroupProduct, updateGroupProduct, deleteGroupProduct,
+  getVariantInputs, type VariantInputEntry,
 } from "@/api/products";
 import type { ProductGroup, ProductGroupType, MaterialType } from "@/types/productGroup";
 import type { GroupAttribute, AttrFormulaVar, AttrFormulaVars } from "@/types/attribute";
@@ -897,8 +898,38 @@ function BomInputModal({ mode, productGroupId, allGroups, onSaved, onClose }: Bo
 
 // ─── formula evaluator (for auto-computing calculated attr values) ────────────
 
-const PGA_RE = /\bpga_[0-9a-f]{8}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{12}\b/g;
+const PGA_RE       = /\bpga_[0-9a-f]{8}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{12}\b/g;
+const PGA_RE_CLONE = () => /\bpga_[0-9a-f]{8}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{4}_[0-9a-f]{12}\b/g;
 
+function pgaTokenToId(token: string): string {
+  // pga_xxxxxxxx_xxxx_xxxx_xxxx_xxxxxxxxxxxx → xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+  return token.slice(4).replace(/_/g, '-');
+}
+
+/**
+ * Evaluate a formula whose variables are pga_<uuid> tokens,
+ * given a map of pgaId → numeric value.
+ */
+function evalFormulaByPgaId(formula: string, pgaValues: Record<string, number>): number | null {
+  let expr = formula;
+  for (const m of (formula.match(PGA_RE_CLONE()) ?? [])) {
+    const pgaId = pgaTokenToId(m);
+    const val   = pgaValues[pgaId];
+    if (val == null || isNaN(val)) continue;
+    expr = expr.replace(new RegExp(`\\b${m}\\b`, 'g'), String(val));
+  }
+  // Fail if any unresolved pga tokens remain
+  if (PGA_RE_CLONE().test(expr)) return null;
+  try {
+    // eslint-disable-next-line no-new-func
+    const result = new Function(`"use strict"; return (${expr})`)();
+    return typeof result === 'number' && isFinite(result) ? result : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Original evalFormula used with formulaVars (for sibling-only calculated attrs) */
 function evalFormula(
   formula: string,
   formulaVars: AttrFormulaVars | null,
@@ -929,6 +960,7 @@ interface ProductVariantModalProps {
   productGroupId: string;
   groupName: string;
   groupAttrs: GroupAttribute[];
+  bomInputs: GroupInput[];
   onSaved: (p: Product) => void;
   onClose: () => void;
 }
@@ -943,7 +975,7 @@ function buildSkuSuggestion(groupName: string, qtyValue: number | string | null 
   return `${abbrev}-${val}${unitClean}`;
 }
 
-function ProductVariantModal({ mode, productGroupId, groupName, groupAttrs, onSaved, onClose }: ProductVariantModalProps) {
+function ProductVariantModal({ mode, productGroupId, groupName, groupAttrs, bomInputs, onSaved, onClose }: ProductVariantModalProps) {
   const isEdit = mode.type === "edit";
   const existing = isEdit ? mode.product : null;
 
@@ -965,10 +997,54 @@ function ProductVariantModal({ mode, productGroupId, groupName, groupAttrs, onSa
   const [saving, setSaving]       = useState(false);
   const [error, setError]         = useState<string | null>(null);
 
-  // Compute values for all calculated attrs in real-time
+  // Variant input selections: productGroupInputId → selected Product[]
+  const [inputGroupProducts, setInputGroupProducts] = useState<Record<string, Product[]>>({});
+  // productGroupInputId → selected inputProductId
+  const [variantInputSelections, setVariantInputSelections] = useState<Record<string, string>>({});
+
+  // Load products for each input group, and existing selections when editing
+  useEffect(() => {
+    if (bomInputs.length === 0) return;
+    let cancelled = false;
+
+    async function load() {
+      // Fetch products for each unique input group
+      const uniqueGroupIds = [...new Set(bomInputs.map((bi) => bi.inputGroupId))];
+      const results = await Promise.all(
+        uniqueGroupIds.map((gid) => listGroupProducts(gid).then((prods) => ({ gid, prods })))
+      );
+      if (cancelled) return;
+      const map: Record<string, Product[]> = {};
+      for (const { gid, prods } of results) map[gid] = prods;
+      setInputGroupProducts(map);
+
+      // Auto-select when only one variant exists per group
+      const autoSel: Record<string, string> = {};
+      for (const bi of bomInputs) {
+        const prods = map[bi.inputGroupId] ?? [];
+        if (prods.length === 1) autoSel[bi.id] = prods[0].id;
+      }
+
+      if (isEdit && existing) {
+        const saved = await getVariantInputs(productGroupId, existing.id);
+        if (cancelled) return;
+        const selMap: Record<string, string> = { ...autoSel };
+        for (const s of saved) selMap[s.productGroupInputId] = s.inputProductId;
+        setVariantInputSelections(selMap);
+      } else {
+        setVariantInputSelections(autoSel);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [bomInputs, isEdit, existing, productGroupId]);
+
+  // Compute values for all calculated + isFromInput attrs in real-time.
+  // isFromInput attrs are resolved against the selected input product's attr values.
   const computedValues = useMemo(() => {
     const result: Record<string, number | null> = {};
-    // Build pgaId → value map from user-entered simple/qty_basis values
+
+    // Step 1: build pgaId → value map for this group's own simple/qty_basis attrs
     const byPgaId: Record<string, number> = {};
     for (const ga of groupAttrs) {
       if (!ga.isCalculated && !ga.isFromInput) {
@@ -976,13 +1052,37 @@ function ProductVariantModal({ mode, productGroupId, groupName, groupAttrs, onSa
         if (typeof v === 'number' && !isNaN(v)) byPgaId[ga.id] = v;
       }
     }
-    for (const ga of groupAttrs) {
-      if (ga.isCalculated && ga.formula) {
-        result[ga.id] = evalFormula(ga.formula, ga.formulaVars, byPgaId);
+
+    // Step 2: resolve isFromInput attrs from the selected input product
+    // Build a combined pgaId → value map that includes the input product's attrs
+    const combined: Record<string, number> = { ...byPgaId };
+    if (bomInputs.length > 0) {
+      // Use the first BOM input's selected product (most groups have exactly one input)
+      const firstBomInput = bomInputs[0];
+      const selectedId    = variantInputSelections[firstBomInput.id];
+      const inputProds    = inputGroupProducts[firstBomInput.inputGroupId] ?? [];
+      const inputProd     = inputProds.find((p) => p.id === selectedId);
+      if (inputProd) {
+        for (const av of inputProd.attributeValues) {
+          if (av.productGroupAttributeId && av.numericValue != null) {
+            combined[av.productGroupAttributeId] = av.numericValue;
+          }
+        }
       }
     }
+
+    for (const ga of groupAttrs) {
+      if (ga.isFromInput && ga.formula) {
+        result[ga.id] = evalFormulaByPgaId(ga.formula, combined);
+        if (result[ga.id] != null) byPgaId[ga.id] = result[ga.id]!;
+      } else if (ga.isCalculated && ga.formula) {
+        result[ga.id] = evalFormula(ga.formula, ga.formulaVars, byPgaId);
+        if (result[ga.id] != null) byPgaId[ga.id] = result[ga.id]!;
+      }
+    }
+
     return result;
-  }, [groupAttrs, values]);
+  }, [groupAttrs, values, bomInputs, variantInputSelections, inputGroupProducts]);
 
   function autoName() {
     const qb = groupAttrs.find((a) => a.isQuantityBasis);
@@ -999,7 +1099,14 @@ function ProductVariantModal({ mode, productGroupId, groupName, groupAttrs, onSa
 
     const attributeValues: CreateProductPayload["attributeValues"] = [];
     for (const ga of groupAttrs) {
-      if (ga.isFromInput) continue; // skip — computed at production time
+      if (ga.isFromInput) {
+        // Save the computed value from the selected input product (if available)
+        const cv = computedValues[ga.id];
+        if (cv !== null && cv !== undefined) {
+          attributeValues.push({ productGroupAttributeId: ga.id, numericValue: cv });
+        }
+        continue;
+      }
       if (ga.isCalculated) {
         const cv = computedValues[ga.id];
         if (cv !== null && cv !== undefined) {
@@ -1017,6 +1124,11 @@ function ProductVariantModal({ mode, productGroupId, groupName, groupAttrs, onSa
       }
     }
 
+    const variantInputs: { productGroupInputId: string; inputProductId: string }[] =
+      Object.entries(variantInputSelections)
+        .filter(([, inputProductId]) => Boolean(inputProductId))
+        .map(([productGroupInputId, inputProductId]) => ({ productGroupInputId, inputProductId }));
+
     try {
       let saved: Product;
       if (isEdit) {
@@ -1025,6 +1137,7 @@ function ProductVariantModal({ mode, productGroupId, groupName, groupAttrs, onSa
           sku: sku.trim() || null,
           description: description.trim() || null,
           attributeValues,
+          variantInputs,
         });
       } else {
         saved = await createGroupProduct(productGroupId, {
@@ -1032,6 +1145,7 @@ function ProductVariantModal({ mode, productGroupId, groupName, groupAttrs, onSa
           sku: sku.trim() || undefined,
           description: description.trim() || undefined,
           attributeValues,
+          variantInputs,
         });
       }
       onSaved(saved);
@@ -1143,9 +1257,17 @@ function ProductVariantModal({ mode, productGroupId, groupName, groupAttrs, onSa
                     {/* Input field */}
                     <div className="w-32 shrink-0">
                       {isFromInput ? (
-                        <span style={{ color: "var(--color-text-muted)" }} className="text-[11px] italic">
-                          At production time
-                        </span>
+                        computed !== null ? (
+                          <div className="text-right">
+                            <span style={{ color: "#10b981" }} className="text-sm font-mono">
+                              {parseFloat(computed.toFixed(6))}
+                            </span>
+                          </div>
+                        ) : (
+                          <span style={{ color: "var(--color-text-muted)" }} className="text-[11px] italic">
+                            Select input ↑
+                          </span>
+                        )
                       ) : isCalc ? (
                         <div className="text-right">
                           {computed !== null ? (
@@ -1177,6 +1299,54 @@ function ProductVariantModal({ mode, productGroupId, groupName, groupAttrs, onSa
                           style={inputStyle}
                           className="w-full border rounded px-2 py-1 text-sm text-right font-mono focus:outline-none"
                         />
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Input material variant selection (only when group has BOM inputs) */}
+        {bomInputs.length > 0 && (
+          <div className="space-y-1">
+            <p style={{ color: "var(--color-text-muted)" }} className="text-xs font-medium flex items-center gap-1.5">
+              <GitMerge size={11} />
+              Input Material Variants
+            </p>
+            <div className="rounded-lg border divide-y" style={{ borderColor: "var(--color-border)" }}>
+              {bomInputs.map((bi) => {
+                const groupProds = inputGroupProducts[bi.inputGroupId] ?? [];
+                const selectedId = variantInputSelections[bi.id] ?? "";
+                const label = bi.label ? `${bi.inputGroup.name} (${bi.label})` : bi.inputGroup.name;
+                return (
+                  <div key={bi.id} className="flex items-center gap-3 px-3 py-2.5">
+                    <div className="flex-1 min-w-0">
+                      <span style={{ color: "var(--color-text-primary)" }} className="text-xs font-medium">
+                        {label}
+                      </span>
+                      <p style={{ color: "var(--color-text-muted)" }} className="text-[11px]">
+                        Input material
+                      </p>
+                    </div>
+                    <div className="w-48 shrink-0">
+                      {groupProds.length === 0 ? (
+                        <span style={{ color: "var(--color-text-muted)" }} className="text-[11px] italic">
+                          No variants yet
+                        </span>
+                      ) : (
+                        <select
+                          value={selectedId}
+                          onChange={(e) => setVariantInputSelections((prev) => ({ ...prev, [bi.id]: e.target.value }))}
+                          style={inputStyle}
+                          className="w-full border rounded px-2 py-1 text-xs focus:outline-none"
+                        >
+                          <option value="">— select —</option>
+                          {groupProds.map((p) => (
+                            <option key={p.id} value={p.id}>{p.name}{p.sku ? ` (${p.sku})` : ""}</option>
+                          ))}
+                        </select>
                       )}
                     </div>
                   </div>
@@ -1828,6 +1998,7 @@ export default function ProductGroupDetailPage() {
           productGroupId={id}
           groupName={group.name}
           groupAttrs={attrs}
+          bomInputs={inputs}
           onSaved={handleProductSaved}
           onClose={() => setProductModal(null)}
         />

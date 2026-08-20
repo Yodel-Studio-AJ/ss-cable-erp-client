@@ -38,3 +38,15 @@ export async function updateGroupProduct(groupId: string, productId: string, pay
 export async function deleteGroupProduct(groupId: string, productId: string): Promise<void> {
   await api.delete(`/api/product-groups/${groupId}/products/${productId}`);
 }
+
+export interface VariantInputEntry {
+  productGroupInputId: string;
+  inputProductId:      string;
+}
+
+export async function getVariantInputs(groupId: string, productId: string): Promise<VariantInputEntry[]> {
+  const { data } = await api.get<VariantInputEntry[]>(
+    `/api/product-groups/${groupId}/products/${productId}/variant-inputs`,
+  );
+  return data;
+}

@@ -35,6 +35,10 @@ export interface CreateProductPayload {
     numericValue?: number | null;
     textValue?: string | null;
   }[];
+  variantInputs?: {
+    productGroupInputId: string;
+    inputProductId:      string;
+  }[];
 }
 
 export type UpdateProductPayload = Partial<CreateProductPayload>;
