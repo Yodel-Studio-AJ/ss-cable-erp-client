@@ -12,10 +12,12 @@ export interface BomQtyBasisAttr {
 }
 
 export interface BomProductSummary {
-  id:              string;
-  name:            string;
-  groupName:       string;
-  sku:             string | null;
+  id:            string;
+  name:          string;
+  groupName:     string;
+  sku:           string | null;
+  unitPrice:     number | null;
+  pricingMethod: string | null;
   attributeValues: BomAttrValue[];
   qtyBasisAttr:    BomQtyBasisAttr | null;
 }

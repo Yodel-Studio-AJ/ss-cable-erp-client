@@ -4,12 +4,14 @@ import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import {
   Search, ChevronDown, FlaskConical, Package, AlertCircle,
   ArrowRight, Calculator, X, Star, Hash, ChevronRight,
-  Layers, Minus, Plus,
+  Layers, Minus, Plus, GitCompare,
 } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { listAllProducts, type ProductWithGroup } from "@/api/products";
 import { getBomInputs, calculateBom, type BomInput, type BomResult, type BomInputResult, type BomAttrValue } from "@/api/bom";
 import { getGroupAttributes } from "@/api/attributes";
+import { BOM_SANDBOX_KEY } from "@/lib/bom-sandbox";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -39,7 +41,12 @@ function scaleBom(bom: BomResult, factor: number): BomResult {
 }
 
 // Collect leaf-level (raw material) requirements from a full BOM tree
-type RawReq = { productId: string; name: string; groupName: string; unit: string | null; totalQty: number; otherAttrs: { name: string; unit: string | null; totalVal: number }[] };
+type RawReq = {
+  productId: string; name: string; groupName: string;
+  unit: string | null; totalQty: number;
+  unitPrice: number | null; pricingMethod: string | null;
+  otherAttrs: { name: string; unit: string | null; totalVal: number }[];
+};
 
 function collectRaw(bom: BomResult, acc = new Map<string, RawReq>()): Map<string, RawReq> {
   for (const r of bom.inputResults) {
@@ -64,7 +71,13 @@ function collectRaw(bom: BomResult, acc = new Map<string, RawReq>()): Map<string
           const val = av.computedValue ?? av.numericValue;
           if (val != null) otherAttrs.push({ name: av.attrName ?? "", unit: av.attrUnit ?? null, totalVal: val });
         }
-        acc.set(id, { productId: id, name: r.inputProduct.name, groupName: r.inputProduct.groupName, unit: r.inputProduct.qtyBasisAttr?.attrUnit ?? null, totalQty: qty, otherAttrs });
+        acc.set(id, {
+          productId: id, name: r.inputProduct.name, groupName: r.inputProduct.groupName,
+          unit: r.inputProduct.qtyBasisAttr?.attrUnit ?? null, totalQty: qty,
+          unitPrice: r.inputProduct.unitPrice ?? null,
+          pricingMethod: r.inputProduct.pricingMethod ?? null,
+          otherAttrs,
+        });
       }
     } else {
       collectRaw(r.subBom, acc);
@@ -455,26 +468,58 @@ function RawMaterialsSummary({ bom }: { bom: BomResult }) {
         </span>
       </div>
       <div className="divide-y" style={{ borderColor: "var(--color-border)" }}>
-        {raws.map((r) => (
-          <div key={r.productId} className="px-4 py-3">
-            <p className="text-xs font-semibold" style={{ color: "var(--color-text-primary)" }}>{r.name}</p>
-            <p className="text-[11px] mb-1.5" style={{ color: "var(--color-text-muted)" }}>{r.groupName}</p>
-            {/* Primary qty */}
-            <div className="flex items-baseline gap-1.5">
-              <span className="text-lg font-bold tabular-nums" style={{ color: "#22c55e" }}>{fmt(r.totalQty)}</span>
-              <span className="text-xs" style={{ color: "#22c55e", opacity: 0.75 }}>{r.unit ?? "units"}</span>
-            </div>
-            {/* Other derived attrs (e.g. length) */}
-            {r.otherAttrs.map((a) => (
-              <div key={a.name} className="flex items-center justify-between mt-1">
-                <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>{a.name}</span>
-                <span className="text-xs font-mono" style={{ color: "var(--color-text-secondary)" }}>
-                  {a.totalVal.toLocaleString("en-IN", { maximumFractionDigits: 2 })}{a.unit && ` ${a.unit}`}
-                </span>
+        {raws.map((r) => {
+          const totalCost = r.unitPrice != null ? r.unitPrice * r.totalQty : null;
+          return (
+            <div key={r.productId} className="px-4 py-3">
+              <p className="text-xs font-semibold" style={{ color: "var(--color-text-primary)" }}>{r.name}</p>
+              <p className="text-[11px] mb-1.5" style={{ color: "var(--color-text-muted)" }}>{r.groupName}</p>
+
+              {/* Primary qty */}
+              <div className="flex items-baseline gap-1.5">
+                <span className="text-lg font-bold tabular-nums" style={{ color: "#22c55e" }}>{fmt(r.totalQty)}</span>
+                <span className="text-xs" style={{ color: "#22c55e", opacity: 0.75 }}>{r.unit ?? "units"}</span>
               </div>
-            ))}
-          </div>
-        ))}
+
+              {/* Price row */}
+              <div className="flex items-center justify-between mt-1.5 pt-1.5 border-t"
+                style={{ borderColor: "var(--color-border)" }}>
+                <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>Unit price</span>
+                {r.unitPrice != null ? (
+                  <span className="text-xs font-mono font-semibold" style={{ color: "var(--color-text-primary)" }}>
+                    ₹{r.unitPrice.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                    {r.unit && <span className="font-normal opacity-60">/{r.unit}</span>}
+                  </span>
+                ) : (
+                  <span className="text-[11px] italic" style={{ color: "var(--color-text-muted)" }}>not set</span>
+                )}
+              </div>
+              {totalCost != null && (
+                <div className="flex items-center justify-between mt-0.5">
+                  <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>Est. total cost</span>
+                  <span className="text-xs font-mono font-semibold" style={{ color: "#f59e0b" }}>
+                    ₹{totalCost.toLocaleString("en-IN", { maximumFractionDigits: 2 })}
+                  </span>
+                </div>
+              )}
+              {r.unitPrice != null && r.pricingMethod && (
+                <p className="text-[10px] mt-0.5" style={{ color: "var(--color-text-muted)", opacity: 0.6 }}>
+                  {r.pricingMethod.replace(/_/g, " ")}
+                </p>
+              )}
+
+              {/* Other derived attrs (e.g. length) */}
+              {r.otherAttrs.map((a) => (
+                <div key={a.name} className="flex items-center justify-between mt-1">
+                  <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>{a.name}</span>
+                  <span className="text-xs font-mono" style={{ color: "var(--color-text-secondary)" }}>
+                    {a.totalVal.toLocaleString("en-IN", { maximumFractionDigits: 2 })}{a.unit && ` ${a.unit}`}
+                  </span>
+                </div>
+              ))}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -490,6 +535,7 @@ type BomFetchState = {
 };
 
 export default function BomCalculatorPage() {
+  const router = useRouter();
   const [allProducts, setAllProducts]   = useState<ProductWithGroup[]>([]);
   const [loading, setLoading]           = useState(true);
   const [outputProduct, setOutputProduct] = useState<ProductWithGroup | null>(null);
@@ -532,6 +578,22 @@ export default function BomCalculatorPage() {
       setResult(res);
     } catch { setResult(null); } finally { setCalc(false); }
   }, []);
+
+  const openComparison = useCallback((product: ProductWithGroup, qty: number, bom: BomResult) => {
+    const sandbox = {
+      productId:      product.id,
+      productName:    product.name,
+      productGroupId: product.productGroupId,
+      outputQty:      qty,
+      realBom:        bom,
+      editTree:       null,      // built by compare page on first load
+      attrOverrides:  {},
+      sessionVariants: [],
+      savedAt:        Date.now(),
+    };
+    localStorage.setItem(BOM_SANDBOX_KEY, JSON.stringify(sandbox));
+    router.push("/manufacturing/bom/compare");
+  }, [router]);
 
   // Re-calculate (debounced) whenever product or qty changes
   useEffect(() => {
@@ -635,7 +697,13 @@ export default function BomCalculatorPage() {
                     <FlaskConical size={14} style={{ color: "var(--color-text-muted)" }} />
                     <p className="text-sm font-semibold" style={{ color: "var(--color-text-primary)" }}>Material Requirements</p>
                     <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>({result!.inputResults.length} input{result!.inputResults.length !== 1 ? "s" : ""})</span>
-                    {calculating && <span className="ml-auto text-xs" style={{ color: "var(--color-text-muted)" }}>Calculating…</span>}
+                    {calculating && <span className="ml-2 text-xs" style={{ color: "var(--color-text-muted)" }}>Calculating…</span>}
+                    <button
+                      onClick={() => openComparison(outputProduct!, outputQty!, result!)}
+                      className="ml-auto flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border font-medium transition-opacity hover:opacity-70"
+                      style={{ borderColor: "#6366f1", color: "#6366f1", backgroundColor: "color-mix(in srgb, #6366f1 8%, transparent)" }}>
+                      <GitCompare size={12} /> Compare / New BOM
+                    </button>
                   </div>
                   <BomLevelView bom={result!} depth={0} />
                 </section>
