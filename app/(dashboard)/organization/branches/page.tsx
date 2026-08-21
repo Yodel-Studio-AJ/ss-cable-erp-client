@@ -11,7 +11,7 @@ import {
   createSubCompany,
   updateSubCompany,
   deleteSubCompany,
-} from "@/api/subCompanies";
+} from "@/api-client/subCompanies";
 import type { SubCompany } from "@/types/subCompany";
 import type { BranchFormPayload } from "@/components/branches/BranchFormModal";
 import type { AxiosError } from "axios";

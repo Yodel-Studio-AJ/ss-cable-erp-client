@@ -1,4 +1,4 @@
-import { LayoutDashboard, Settings, Package, Building2, Users2, ShoppingCart, Factory } from "lucide-react";
+import { LayoutDashboard, Settings, Package, Building2, Users2, ShoppingCart, Factory, ClipboardList } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 export interface NavChild {
@@ -32,6 +32,13 @@ export const navItems: NavItem[] = [
     icon: ShoppingCart,
     children: [
       { name: "Purchase Orders", href: "/procurement/purchase-orders" },
+    ],
+  },
+  {
+    name: "Orders",
+    icon: ClipboardList,
+    children: [
+      { name: "Quotes", href: "/sales/quotes" },
     ],
   },
   {

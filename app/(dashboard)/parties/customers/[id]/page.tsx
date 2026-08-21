@@ -6,7 +6,7 @@ import { ArrowLeft, Pencil, Users, MapPin, Building2, Hash, FileText, Calendar }
 import CustomerFormModal from "@/components/customers/CustomerFormModal";
 import CustomerContactsModal from "@/components/customers/CustomerContactsModal";
 import { useCustomerStore } from "@/store/customerStore";
-import { getCustomer } from "@/api/customers";
+import { getCustomer } from "@/api-client/customers";
 import type { CustomerWithContacts } from "@/types/customer";
 
 function fmt(iso: string) {

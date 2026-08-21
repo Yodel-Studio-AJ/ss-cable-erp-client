@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Save } from "lucide-react";
-import { createCustomer } from "@/api/customers";
+import { createCustomer } from "@/api-client/customers";
 import { useCustomerStore } from "@/store/customerStore";
 import type { CreateCustomerPayload } from "@/types/customer";
 import type { AxiosError } from "axios";

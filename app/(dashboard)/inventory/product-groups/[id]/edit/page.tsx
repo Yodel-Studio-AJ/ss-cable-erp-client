@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, Save } from "lucide-react";
-import { getProductGroup, updateProductGroup } from "@/api/productGroups";
+import { getProductGroup, updateProductGroup } from "@/api-client/productGroups";
 import type { ProductGroupType, MaterialType, UpdateProductGroupPayload } from "@/types/productGroup";
 import {
   PRODUCT_GROUP_TYPE_LABELS,

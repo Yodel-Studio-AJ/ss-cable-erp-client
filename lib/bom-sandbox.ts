@@ -3,7 +3,7 @@
  * State is persisted in localStorage under BOM_SANDBOX_KEY.
  */
 
-import type { BomResult, BomInputResult } from "@/api/bom";
+import type { BomResult, BomInputResult } from "@/api-client/bom";
 
 export const BOM_SANDBOX_KEY = "bom-sandbox-v1";
 

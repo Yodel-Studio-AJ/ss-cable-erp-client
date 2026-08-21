@@ -14,8 +14,9 @@ import {
   updateNodeInTree, readSandbox, writeSandbox, clearSandbox,
   type BomSandbox, type EditNode, type SessionVariant,
 } from "@/lib/bom-sandbox";
-import type { BomResult, BomInputResult, BomAttrValue } from "@/api/bom";
-import { listGroupProducts, createGroupProduct } from "@/api/products";
+import type { BomResult, BomInputResult, BomAttrValue } from "@/api-client/bom";
+import { listGroupProducts, createGroupProduct } from "@/api-client/products";
+import { calculateBom } from "@/api-client/bom";
 import type { Product } from "@/types/product";
 
 // ─── fmt ──────────────────────────────────────────────────────────────────────
@@ -265,7 +266,7 @@ function EditableNode({
   onSwap: (bomInputId: string, newId: string, newName: string) => void;
   onQtyChange: (bomInputId: string, qty: number | null) => void;
 }) {
-  const [expanded,    setExpanded]    = useState(depth < 1);
+  const [expanded,    setExpanded]    = useState(depth < 2);
   const [swapOpen,    setSwapOpen]    = useState(false);
   const [editQty,     setEditQty]     = useState(false);
   const [qtyStr,      setQtyStr]      = useState("");
@@ -409,7 +410,7 @@ function EditableNode({
 // ─── real BOM node (read-only) ────────────────────────────────────────────────
 
 function RealNode({ result, depth }: { result: BomInputResult; depth: number }) {
-  const [expanded, setExpanded] = useState(depth < 1);
+  const [expanded, setExpanded] = useState(depth < 2);
   const accent = depth === 0 ? "#6366f1" : depth === 1 ? "#f59e0b" : "#22c55e";
   const hasChildren = result.subBom && result.subBom.inputResults.length > 0;
 
@@ -836,14 +837,239 @@ function RawMaterialDiff({ editTree }: { editTree: EditNode[] }) {
   );
 }
 
+// ─── raw materials comparison ─────────────────────────────────────────────────
+
+type RawMaterialRow = {
+  key:         string;   // bomInputId path (used as React key + for matching)
+  name:        string;
+  qty:         number | null;
+  unit:        string | null;
+  groupName:   string;
+};
+
+/** Recursively collect leaf nodes from a BomResult tree (leaves = raw materials). */
+function collectRealRaw(results: BomInputResult[], path = ""): RawMaterialRow[] {
+  const out: RawMaterialRow[] = [];
+  for (const r of results) {
+    const key = path ? `${path}/${r.bomInputId}` : r.bomInputId;
+    if (r.subBom && r.subBom.inputResults.length > 0) {
+      out.push(...collectRealRaw(r.subBom.inputResults, key));
+    } else {
+      out.push({
+        key,
+        name:      r.inputProduct.name,
+        qty:       r.requiredQty,
+        unit:      r.inputProduct.qtyBasisAttr?.attrUnit ?? null,
+        groupName: r.inputGroupName,
+      });
+    }
+  }
+  return out;
+}
+
+/** Recursively collect leaf EditNodes from the parallel BOM tree. */
+function collectParallelRaw(nodes: EditNode[], path = ""): RawMaterialRow[] {
+  const out: RawMaterialRow[] = [];
+  for (const n of nodes) {
+    const key = path ? `${path}/${n.bomInputId}` : n.bomInputId;
+    if (n.children.length > 0) {
+      out.push(...collectParallelRaw(n.children, key));
+    } else {
+      out.push({
+        key,
+        name:      n.currentProductName,
+        qty:       n.manualQty ?? n.originalQty,
+        unit:      null,
+        groupName: n.inputGroupName,
+      });
+    }
+  }
+  return out;
+}
+
+function RawMaterialsComparison({
+  realBom, editTree, parallelBomResult, parallelLoading,
+}: {
+  realBom: BomResult;
+  editTree: EditNode[];
+  parallelBomResult: BomResult | null;
+  parallelLoading: boolean;
+}) {
+  const realRaw = useMemo(() => collectRealRaw(realBom.inputResults), [realBom]);
+  // Use live recalculated result when available, otherwise fall back to editTree leaf quantities
+  const parallelRaw = useMemo(
+    () => parallelBomResult
+      ? collectRealRaw(parallelBomResult.inputResults)
+      : collectParallelRaw(editTree),
+    [parallelBomResult, editTree],
+  );
+
+  // Build a merged list keyed by bomInputId path
+  const parallelMap = useMemo(() => {
+    const m = new Map<string, RawMaterialRow>();
+    for (const r of parallelRaw) m.set(r.key, r);
+    return m;
+  }, [parallelRaw]);
+
+  // All unique keys from both sides
+  const allKeys = useMemo(() => {
+    const set = new Set<string>();
+    realRaw.forEach((r)     => set.add(r.key));
+    parallelRaw.forEach((r) => set.add(r.key));
+    return Array.from(set);
+  }, [realRaw, parallelRaw]);
+
+  const realMap = useMemo(() => {
+    const m = new Map<string, RawMaterialRow>();
+    for (const r of realRaw) m.set(r.key, r);
+    return m;
+  }, [realRaw]);
+
+  return (
+    <div className="mt-8 rounded-xl border overflow-hidden"
+      style={{ borderColor: "color-mix(in srgb, #6366f1 25%, transparent)" }}>
+      <div className="px-4 py-3 flex items-center gap-2"
+        style={{
+          backgroundColor: "color-mix(in srgb, #6366f1 6%, transparent)",
+          borderBottom:    "1px solid color-mix(in srgb, #6366f1 15%, transparent)",
+        }}>
+        <Layers size={13} style={{ color: "#6366f1" }} />
+        <p className="text-sm font-semibold" style={{ color: "#6366f1" }}>
+          Raw Materials Comparison
+        </p>
+        {parallelLoading
+          ? <Loader2 size={12} className="animate-spin ml-auto" style={{ color: "#6366f1" }} />
+          : (
+            <span className="text-[10px] ml-auto px-2 py-0.5 rounded"
+              style={{ backgroundColor: "color-mix(in srgb, #6366f1 12%, transparent)", color: "#6366f1" }}>
+              {allKeys.length} material{allKeys.length !== 1 ? "s" : ""}
+            </span>
+          )}
+      </div>
+
+      {/* Column headers */}
+      <div className="grid px-4 py-2 text-[10px] font-semibold uppercase tracking-wide"
+        style={{
+          gridTemplateColumns: "1fr 1fr",
+          gap: 16,
+          color:           "var(--color-text-muted)",
+          borderBottom:    "1px solid var(--color-border)",
+          backgroundColor: "var(--color-bg-subtle)",
+        }}>
+        <span>Real BOM</span>
+        <span>Parallel BOM</span>
+      </div>
+
+      <div className="divide-y" style={{ borderColor: "var(--color-border)" }}>
+        {allKeys.map((key) => {
+          const real     = realMap.get(key);
+          const parallel = parallelMap.get(key);
+          const nameChanged = real?.name !== parallel?.name;
+          const qtyChanged  = real?.qty  !== parallel?.qty;
+          const anyChange   = nameChanged || qtyChanged;
+
+          return (
+            <div key={key}
+              className="grid px-4 py-3"
+              style={{
+                gridTemplateColumns: "1fr 1fr",
+                gap:             16,
+                backgroundColor: anyChange
+                  ? "color-mix(in srgb, #f59e0b 4%, transparent)"
+                  : undefined,
+              }}>
+              {/* Real side */}
+              <div className="space-y-0.5">
+                {real ? (
+                  <>
+                    <p className="text-xs font-medium leading-tight" style={{ color: "var(--color-text-primary)" }}>
+                      {real.name}
+                    </p>
+                    <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+                      {real.groupName}
+                    </p>
+                    <p className="text-xs font-mono font-bold" style={{ color: "#6366f1" }}>
+                      {real.qty != null ? fmt(real.qty) : "—"}
+                      {real.unit ? <span className="text-[10px] font-normal ml-1 opacity-70">{real.unit}</span> : null}
+                    </p>
+                  </>
+                ) : (
+                  <p className="text-xs italic" style={{ color: "var(--color-text-muted)" }}>—</p>
+                )}
+              </div>
+
+              {/* Parallel side */}
+              <div className="space-y-0.5">
+                {parallel ? (
+                  <>
+                    <p className="text-xs font-medium leading-tight"
+                      style={{ color: nameChanged ? "#d97706" : "var(--color-text-primary)" }}>
+                      {parallel.name}
+                      {nameChanged && (
+                        <span className="ml-1.5 text-[10px] px-1 py-0.5 rounded font-normal"
+                          style={{ backgroundColor: "color-mix(in srgb, #f59e0b 15%, transparent)", color: "#d97706" }}>
+                          swapped
+                        </span>
+                      )}
+                    </p>
+                    <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+                      {parallel.groupName}
+                    </p>
+                    <div className="flex items-baseline gap-1.5">
+                      <p className="text-xs font-mono font-bold"
+                        style={{ color: qtyChanged ? "#f59e0b" : "#6366f1" }}>
+                        {parallel.qty != null ? fmt(parallel.qty) : "—"}
+                      </p>
+                      {parallel.unit && (
+                        <span className="text-[10px] opacity-70" style={{ color: "var(--color-text-muted)" }}>
+                          {parallel.unit}
+                        </span>
+                      )}
+                      {qtyChanged && real?.qty != null && parallel.qty != null && (
+                        <span className="text-[10px] px-1 py-0.5 rounded"
+                          style={{
+                            backgroundColor: "color-mix(in srgb, #f59e0b 12%, transparent)",
+                            color: "#d97706",
+                          }}>
+                          {parallel.qty > real.qty ? "+" : ""}
+                          {fmt(parallel.qty - real.qty)}
+                        </span>
+                      )}
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-xs italic" style={{ color: "var(--color-text-muted)" }}>—</p>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {allKeys.length === 0 && (
+        <p className="px-4 py-6 text-xs text-center" style={{ color: "var(--color-text-muted)" }}>
+          No raw materials found in this BOM.
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ─── page ─────────────────────────────────────────────────────────────────────
+
+/** Flatten top-level EditNode selections (depth-0 only — server handles sub-BOM recursion). */
+function topLevelSelections(nodes: EditNode[]) {
+  return nodes.map((n) => ({ bomInputId: n.bomInputId, inputProductId: n.currentProductId }));
+}
 
 export default function BomComparePage() {
   const router = useRouter();
-  const [sandbox,      setSandbox]      = useState<BomSandbox | null>(null);
-  const [wizardOpen,   setWizardOpen]   = useState(false);
-  const [variantSteps, setVariantSteps] = useState<VariantStep[]>([]);
-  const [successMsg,   setSuccessMsg]   = useState<string | null>(null);
+  const [sandbox,           setSandbox]           = useState<BomSandbox | null>(null);
+  const [wizardOpen,        setWizardOpen]         = useState(false);
+  const [variantSteps,      setVariantSteps]       = useState<VariantStep[]>([]);
+  const [successMsg,        setSuccessMsg]         = useState<string | null>(null);
+  const [parallelBomResult, setParallelBomResult]  = useState<BomResult | null>(null);
+  const [parallelLoading,   setParallelLoading]    = useState(false);
 
   // Load sandbox from localStorage on mount
   useEffect(() => {
@@ -856,6 +1082,31 @@ export default function BomComparePage() {
     }
     setSandbox(s);
   }, [router]);
+
+  // Re-calculate the parallel BOM whenever editTree or attrOverrides changes.
+  // Debounced 450ms so rapid edits don't spam the server.
+  useEffect(() => {
+    if (!sandbox) return;
+    setParallelLoading(true);
+    const timer = setTimeout(async () => {
+      try {
+        const result = await calculateBom({
+          outputProductId: sandbox.productId,
+          outputQty:       sandbox.outputQty,
+          inputs:          topLevelSelections(sandbox.editTree ?? []),
+          attrOverrides:   sandbox.attrOverrides,
+        });
+        setParallelBomResult(result);
+      } catch (err) {
+        console.error("Parallel BOM recalc failed", err);
+      } finally {
+        setParallelLoading(false);
+      }
+    }, 450);
+    return () => clearTimeout(timer);
+  // We intentionally depend on the whole sandbox so changes to editTree OR attrOverrides trigger recalc.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sandbox?.editTree, sandbox?.attrOverrides]);
 
   // Persist sandbox whenever it changes
   const save = useCallback((patch: Partial<BomSandbox>) => {
@@ -936,6 +1187,17 @@ export default function BomComparePage() {
     router.replace("/manufacturing/bom");
   }
 
+  // Derived state — computed unconditionally (hooks must not appear after early returns)
+  const editTree     = sandbox?.editTree ?? [];
+  const totalChanges = sandbox
+    ? countChanges(editTree) + Object.keys(sandbox.attrOverrides).length
+    : 0;
+  const variantStepCount = useMemo(
+    () => (sandbox && totalChanges > 0 ? buildVariantPlan(sandbox, editTree).length : 0),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [editTree, sandbox?.attrOverrides, totalChanges],
+  );
+
   if (!sandbox) {
     return (
       <div className="flex items-center justify-center h-60" style={{ color: "var(--color-text-muted)" }}>
@@ -943,9 +1205,6 @@ export default function BomComparePage() {
       </div>
     );
   }
-
-  const editTree = sandbox.editTree ?? [];
-  const totalChanges = countChanges(editTree) + Object.keys(sandbox.attrOverrides).length;
 
   return (
     <div className="px-6 py-8 max-w-[1400px] mx-auto">
@@ -971,12 +1230,12 @@ export default function BomComparePage() {
             style={{ borderColor: "#ef4444", color: "#ef4444", backgroundColor: "color-mix(in srgb, #ef4444 6%, transparent)" }}>
             <Trash2 size={12} /> Clear Sandbox
           </button>
-          {totalChanges > 0 && (
+          {variantStepCount > 0 && (
             <button onClick={openWizard}
               className="flex items-center gap-2 text-sm px-4 py-1.5 rounded-lg font-medium"
               style={{ backgroundColor: "#6366f1", color: "#fff" }}>
               <RefreshCw size={13} />
-              Create Variants ({totalChanges})
+              Create Variants ({variantStepCount})
             </button>
           )}
         </div>
@@ -1079,6 +1338,14 @@ export default function BomComparePage() {
         </div>
       </div>
 
+      {/* Raw materials side-by-side comparison (always visible) */}
+      <RawMaterialsComparison
+        realBom={sandbox.realBom}
+        editTree={editTree}
+        parallelBomResult={parallelBomResult}
+        parallelLoading={parallelLoading}
+      />
+
       {/* Diff summary footer */}
       {totalChanges > 0 && (
         <div className="mt-8 rounded-xl border p-4"
@@ -1140,7 +1407,7 @@ export default function BomComparePage() {
           <button onClick={openWizard}
             className="mt-4 flex items-center gap-2 text-sm px-5 py-2 rounded-lg font-medium"
             style={{ backgroundColor: "#6366f1", color: "#fff" }}>
-            <RefreshCw size={13} /> Create Variants from Changes
+            <RefreshCw size={13} /> Create {variantStepCount} Variant{variantStepCount !== 1 ? "s" : ""} from Changes
           </button>
         </div>
       )}

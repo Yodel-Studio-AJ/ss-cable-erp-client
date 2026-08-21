@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Modal from "@/components/ui/Modal";
-import { createCustomer, updateCustomer } from "@/api/customers";
+import { createCustomer, updateCustomer } from "@/api-client/customers";
 import { useCustomerStore } from "@/store/customerStore";
 import type { Customer, CreateCustomerPayload } from "@/types/customer";
 import type { AxiosError } from "axios";

@@ -3,7 +3,7 @@
 import { useEffect, useState, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, Save, AlertCircle, CheckCircle, X } from "lucide-react";
-import { getVendor, updateVendor } from "@/api/vendors";
+import { getVendor, updateVendor } from "@/api-client/vendors";
 import type { UpdateVendorPayload, VendorType } from "@/types/vendor";
 import type { AxiosError } from "axios";
 

@@ -8,12 +8,12 @@ import {
   Hash, FlaskConical, GitMerge, Star, AlertTriangle, ShoppingCart,
   TrendingUp, Layers, ChevronRight, Edit2, IndianRupee,
 } from "lucide-react";
-import { getProduct, type ProductWithGroup } from "@/api/products";
+import { getProduct, type ProductWithGroup } from "@/api-client/products";
 import {
   getStock, setLowStockThreshold, getStockBatches,
   getProductPricing, updatePricingConfig,
-} from "@/api/purchaseOrders";
-import { listPurchaseOrders } from "@/api/purchaseOrders";
+} from "@/api-client/purchaseOrders";
+import { listPurchaseOrders } from "@/api-client/purchaseOrders";
 import type {
   StockInfo, StockBatch, ProductPricingData, PricingMethod,
   PurchaseOrder, PoStatus,

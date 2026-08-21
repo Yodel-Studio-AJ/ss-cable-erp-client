@@ -63,10 +63,10 @@ Stack: **Next.js 16 · React 19 · TypeScript · Tailwind CSS v4 · Zustand · A
 
 | File | Functions |
 |------|-----------|
-| `api/auth.ts` | `login(payload)`, `register(payload)` |
-| `api/users.ts` | `getUsers()`, `getUserById(id)`, `createUser(payload)`, `updateUser(id, payload)`, `deleteUser(id)` |
-| `api/subCompanies.ts` | `getSubCompanies()`, `getSubCompany(id)`, `createSubCompany(payload)`, `updateSubCompany(id, payload)`, `deleteSubCompany(id)`, `getSubCompanyMembers(id)`, `addSubCompanyMember(id, payload)`, `updateSubCompanyMember(id, userId, isPrimary)`, `removeSubCompanyMember(id, userId)` |
-| `api/productGroups.ts` | `getProductGroups()`, `getProductGroup(id)`, `createProductGroup(payload)`, `updateProductGroup(id, payload)`, `deleteProductGroup(id)` |
+| `api-client/auth.ts` | `login(payload)`, `register(payload)` |
+| `api-client/users.ts` | `getUsers()`, `getUserById(id)`, `createUser(payload)`, `updateUser(id, payload)`, `deleteUser(id)` |
+| `api-client/subCompanies.ts` | `getSubCompanies()`, `getSubCompany(id)`, `createSubCompany(payload)`, `updateSubCompany(id, payload)`, `deleteSubCompany(id)`, `getSubCompanyMembers(id)`, `addSubCompanyMember(id, payload)`, `updateSubCompanyMember(id, userId, isPrimary)`, `removeSubCompanyMember(id, userId)` |
+| `api-client/productGroups.ts` | `getProductGroups()`, `getProductGroup(id)`, `createProductGroup(payload)`, `updateProductGroup(id, payload)`, `deleteProductGroup(id)` |
 
 ---
 
@@ -99,3 +99,26 @@ Stack: **Next.js 16 · React 19 · TypeScript · Tailwind CSS v4 · Zustand · A
 | File | What it does |
 |------|-------------|
 | `utils/token.ts` | `isTokenExpired(token)` — decodes JWT and checks `exp` against current time |
+
+---
+
+## Quotes (2026-08-21)
+
+New "Orders" sidebar section (`constants/navItems.ts`) with a "Quotes" sub nav item →
+`/sales/quotes`. Mirrors the Purchase Orders pages but for the sell side: link a customer,
+add products with quantity + a display name (defaults to the product's name, editable).
+
+| File | What it does |
+|------|-------------|
+| `types/quote.ts` | `Quote`, `QuoteItem`, status enum + labels, create/update/item payloads |
+| `api-client/quotes.ts` | `listQuotes`, `getQuote`, `createQuote`, `updateQuote`, `addQuoteItem`, `removeQuoteItem` |
+| `components/quotes/CreateQuoteModal.tsx` | Multi-item create form — customer picker, product/qty/price rows, optional pre-fill for a single line (used from BOM) |
+| `components/quotes/AddToQuoteModal.tsx` | Push one product+qty straight onto an existing draft quote, or fall through to `CreateQuoteModal` for a brand new one |
+| `app/(dashboard)/sales/quotes/page.tsx` | List page — search, status filter, create modal |
+| `app/(dashboard)/sales/quotes/[id]/page.tsx` | Detail page — status stepper (draft→sent→accepted/rejected/expired), items table with remove-line (draft only), print/PDF |
+
+**BOM → Quote integration**: `app/(dashboard)/manufacturing/bom/page.tsx` has an "Add to Quote"
+button next to "Compare / New BOM" once a result is showing. It opens `AddToQuoteModal` prefilled
+with the output product and the entered output quantity, so a calculated BOM output can be pushed
+straight onto a customer quote. This item data (product, qty, display name) is the intended seed
+for a future Work Order — not yet implemented.

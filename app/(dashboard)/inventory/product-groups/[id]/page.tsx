@@ -9,18 +9,18 @@ import {
   Package, Hash, CheckCircle, XCircle, Calculator,
 } from "lucide-react";
 import Modal from "@/components/ui/Modal";
-import { getProductGroup, getProductGroups } from "@/api/productGroups";
+import { getProductGroup, getProductGroups } from "@/api-client/productGroups";
 import {
   createAttribute, getGroupAttributes,
   addGroupAttribute, updateGroupAttribute, removeGroupAttribute, reorderGroupAttributes,
-} from "@/api/attributes";
+} from "@/api-client/attributes";
 import {
   getGroupInputs, addGroupInput, updateGroupInput, removeGroupInput,
-} from "@/api/productGroupInputs";
+} from "@/api-client/productGroupInputs";
 import {
   listGroupProducts, createGroupProduct, updateGroupProduct, deleteGroupProduct,
   getVariantInputs, type VariantInputEntry,
-} from "@/api/products";
+} from "@/api-client/products";
 import type { ProductGroup, ProductGroupType, MaterialType } from "@/types/productGroup";
 import type { GroupAttribute, AttrFormulaVar, AttrFormulaVars } from "@/types/attribute";
 import type { GroupInput, FormulaVar, FormulaVars } from "@/types/productGroupInput";

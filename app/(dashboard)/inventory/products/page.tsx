@@ -5,9 +5,9 @@ import Link from "next/link";
 import {
   Search, Package, ChevronRight, CheckCircle, XCircle, Star, ShoppingCart, X,
 } from "lucide-react";
-import { listAllProducts, type ProductWithGroup } from "@/api/products";
-import { getVendors } from "@/api/vendors";
-import { createPurchaseOrder } from "@/api/purchaseOrders";
+import { listAllProducts, type ProductWithGroup } from "@/api-client/products";
+import { getVendors } from "@/api-client/vendors";
+import { createPurchaseOrder } from "@/api-client/purchaseOrders";
 import type { Vendor } from "@/types/vendor";
 import type { CreatePoPayload } from "@/types/purchaseOrder";
 

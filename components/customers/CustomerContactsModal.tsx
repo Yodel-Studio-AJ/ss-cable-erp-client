@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Plus, Pencil, Trash2, Star, Phone, Mail } from "lucide-react";
 import Modal from "@/components/ui/Modal";
-import { getContacts, createContact, updateContact, deleteContact } from "@/api/customers";
+import { getContacts, createContact, updateContact, deleteContact } from "@/api-client/customers";
 import type { Customer, CustomerContact, CreateContactPayload } from "@/types/customer";
 import type { AxiosError } from "axios";
 

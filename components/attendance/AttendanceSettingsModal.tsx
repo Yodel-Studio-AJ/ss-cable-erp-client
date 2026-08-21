@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { X, Loader2 } from "lucide-react";
-import { getAttendanceSettings, updateAttendanceSetting } from "@/api/attendance";
+import { getAttendanceSettings, updateAttendanceSetting } from "@/api-client/attendance";
 import type { AttendanceSettingUser } from "@/types/attendance";
 
 interface Props {

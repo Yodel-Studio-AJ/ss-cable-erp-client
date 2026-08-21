@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { register } from "@/api/auth";
+import { register } from "@/api-client/auth";
 import { useAuthStore } from "@/store/authStore";
 import { isTokenExpired } from "@/utils/token";
 import type { AxiosError } from "axios";

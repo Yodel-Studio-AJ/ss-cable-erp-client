@@ -8,12 +8,12 @@ import {
 } from "lucide-react";
 import {
   listPurchaseOrders, createPurchaseOrder,
-} from "@/api/purchaseOrders";
-import { listAllProducts } from "@/api/products";
-import { getVendors } from "@/api/vendors";
+} from "@/api-client/purchaseOrders";
+import { listAllProducts } from "@/api-client/products";
+import { getVendors } from "@/api-client/vendors";
 import type { PurchaseOrder, CreatePoPayload, PoStatus, PoItemInput } from "@/types/purchaseOrder";
 import { PO_STATUS_LABELS } from "@/types/purchaseOrder";
-import type { ProductWithGroup } from "@/api/products";
+import type { ProductWithGroup } from "@/api-client/products";
 import type { Vendor } from "@/types/vendor";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────

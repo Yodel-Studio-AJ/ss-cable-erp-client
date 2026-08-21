@@ -9,8 +9,8 @@ import {
   addSubCompanyMember,
   removeSubCompanyMember,
   updateSubCompanyMember,
-} from "@/api/subCompanies";
-import { getUsers } from "@/api/users";
+} from "@/api-client/subCompanies";
+import { getUsers } from "@/api-client/users";
 import type { SubCompany, SubCompanyMember } from "@/types/subCompany";
 import type { User, UserRole } from "@/types/auth";
 import type { AxiosError } from "axios";

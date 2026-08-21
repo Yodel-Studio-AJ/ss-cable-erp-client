@@ -12,7 +12,7 @@ import {
   getProductGroups,
   createProductGroup,
   deleteProductGroup,
-} from "@/api/productGroups";
+} from "@/api-client/productGroups";
 import type { ProductGroup, ProductGroupType, MaterialType, CreateProductGroupPayload } from "@/types/productGroup";
 import {
   PRODUCT_GROUP_TYPE_LABELS,

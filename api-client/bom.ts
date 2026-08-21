@@ -66,6 +66,7 @@ export async function calculateBom(payload: {
   outputProductId: string;
   outputQty:       number;
   inputs: { bomInputId: string; inputProductId: string }[];
+  attrOverrides?:  Record<string, number | string>;
 }): Promise<BomResult> {
   const { data } = await api.post<BomResult>('/api/bom/calculate', payload);
   return data;

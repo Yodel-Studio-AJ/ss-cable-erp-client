@@ -4,14 +4,16 @@ import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import {
   Search, ChevronDown, FlaskConical, Package, AlertCircle,
   ArrowRight, Calculator, X, Star, Hash, ChevronRight,
-  Layers, Minus, Plus, GitCompare,
+  Layers, Minus, Plus, GitCompare, FileText,
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { listAllProducts, type ProductWithGroup } from "@/api/products";
-import { getBomInputs, calculateBom, type BomInput, type BomResult, type BomInputResult, type BomAttrValue } from "@/api/bom";
-import { getGroupAttributes } from "@/api/attributes";
+import { listAllProducts, type ProductWithGroup } from "@/api-client/products";
+import { getBomInputs, calculateBom, type BomInput, type BomResult, type BomInputResult, type BomAttrValue } from "@/api-client/bom";
+import { getGroupAttributes } from "@/api-client/attributes";
 import { BOM_SANDBOX_KEY } from "@/lib/bom-sandbox";
+import { AddToQuoteModal } from "@/components/quotes/AddToQuoteModal";
+import type { Quote } from "@/types/quote";
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -543,6 +545,8 @@ export default function BomCalculatorPage() {
   const [bomFetch, setBomFetch]         = useState<BomFetchState | null>(null);
   const [result, setResult]             = useState<BomResult | null>(null);
   const [calculating, setCalc]          = useState(false);
+  const [showAddToQuote, setShowAddToQuote] = useState(false);
+  const [quoteToast, setQuoteToast]     = useState<Quote | null>(null);
 
   useEffect(() => { listAllProducts().then(setAllProducts).finally(() => setLoading(false)); }, []);
 
@@ -570,6 +574,16 @@ export default function BomCalculatorPage() {
   }, []);
 
   const outputQty = outputQtyStr.trim() !== "" ? parseFloat(outputQtyStr) : null;
+
+  // Total raw-material cost across the whole BOM tree — feeds the "Add to Quote" margin-based pricing helper
+  const rawCostInfo = useMemo(() => {
+    if (!result) return null;
+    const raws = [...collectRaw(result).values()];
+    if (raws.length === 0) return null;
+    const total     = raws.reduce((s, r) => s + (r.unitPrice != null ? r.unitPrice * r.totalQty : 0), 0);
+    const allPriced = raws.every((r) => r.unitPrice != null);
+    return { total, allPriced };
+  }, [result]);
 
   const calculate = useCallback(async (product: ProductWithGroup, qty: number) => {
     setCalc(true);
@@ -699,8 +713,14 @@ export default function BomCalculatorPage() {
                     <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>({result!.inputResults.length} input{result!.inputResults.length !== 1 ? "s" : ""})</span>
                     {calculating && <span className="ml-2 text-xs" style={{ color: "var(--color-text-muted)" }}>Calculating…</span>}
                     <button
-                      onClick={() => openComparison(outputProduct!, outputQty!, result!)}
+                      onClick={() => setShowAddToQuote(true)}
                       className="ml-auto flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border font-medium transition-opacity hover:opacity-70"
+                      style={{ borderColor: "#22c55e", color: "#22c55e", backgroundColor: "color-mix(in srgb, #22c55e 8%, transparent)" }}>
+                      <FileText size={12} /> Add to Quote
+                    </button>
+                    <button
+                      onClick={() => openComparison(outputProduct!, outputQty!, result!)}
+                      className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg border font-medium transition-opacity hover:opacity-70"
                       style={{ borderColor: "#6366f1", color: "#6366f1", backgroundColor: "color-mix(in srgb, #6366f1 8%, transparent)" }}>
                       <GitCompare size={12} /> Compare / New BOM
                     </button>
@@ -738,6 +758,32 @@ export default function BomCalculatorPage() {
           </div>
         )}
       </div>
+
+      {showAddToQuote && outputProduct && (
+        <AddToQuoteModal
+          productId={outputProduct.id}
+          productName={outputProduct.name}
+          defaultQty={outputQty ?? undefined}
+          products={allProducts}
+          rawMaterialCost={rawCostInfo?.total}
+          rawMaterialCostPartial={rawCostInfo ? !rawCostInfo.allPriced : undefined}
+          onDone={(quote) => { setShowAddToQuote(false); setQuoteToast(quote); }}
+          onClose={() => setShowAddToQuote(false)}
+        />
+      )}
+
+      {quoteToast && (
+        <div className="fixed bottom-6 right-6 z-50 flex items-center gap-3 rounded-xl border px-4 py-3 shadow-2xl"
+          style={{ backgroundColor: "var(--color-bg-popup)", borderColor: "var(--color-border)" }}>
+          <FileText size={16} style={{ color: "#22c55e" }} />
+          <p className="text-sm" style={{ color: "var(--color-text-primary)" }}>
+            Added to <Link href={`/sales/quotes/${quoteToast.id}`} className="font-semibold underline underline-offset-2">{quoteToast.quoteNumber}</Link>
+          </p>
+          <button onClick={() => setQuoteToast(null)} className="p-1 rounded hover:opacity-70" style={{ color: "var(--color-text-muted)" }}>
+            <X size={13} />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

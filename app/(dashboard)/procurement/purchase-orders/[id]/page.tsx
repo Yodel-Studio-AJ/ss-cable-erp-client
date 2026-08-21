@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import {
   getPurchaseOrder, updatePurchaseOrder, cancelPurchaseOrder, deliverPurchaseOrderItem,
-} from "@/api/purchaseOrders";
+} from "@/api-client/purchaseOrders";
 import type { PurchaseOrder, PurchaseOrderItem, PoStatus } from "@/types/purchaseOrder";
 import { PO_STATUS_LABELS, PO_NEXT_STATUS } from "@/types/purchaseOrder";
 

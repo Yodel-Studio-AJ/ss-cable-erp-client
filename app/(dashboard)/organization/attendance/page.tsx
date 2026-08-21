@@ -9,7 +9,7 @@ import {
   getMonthSummary,
   getDayAttendance,
   markAttendance,
-} from "@/api/attendance";
+} from "@/api-client/attendance";
 import type { DaySummary, DayAttendanceUser, MarkRecord } from "@/types/attendance";
 import { useAuthStore } from "@/store/authStore";
 

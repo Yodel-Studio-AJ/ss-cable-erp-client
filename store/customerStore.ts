@@ -1,7 +1,7 @@
 "use client";
 
 import { create } from "zustand";
-import { getCustomers, deleteCustomer } from "@/api/customers";
+import { getCustomers, deleteCustomer } from "@/api-client/customers";
 import type { Customer } from "@/types/customer";
 import type { AxiosError } from "axios";
 
